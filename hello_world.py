@@ -115,8 +115,19 @@ def main():
         
     except Exception as e:
         print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        config.module_exit()
+        # 7. Robust cleanup
+        if 'config' in globals() or 'config' in locals():
+            if hasattr(config, 'module_exit'):
+                print("Running config.module_exit()...")
+                config.module_exit()
+            else:
+                print("Warning: config has no 'module_exit' attribute.")
+                # Debug: Show available attributes to find the real cleanup
+                print(f"Available config attributes: {[attr for attr in dir(config) if not attr.startswith('__')]}")
+        
         print("Cleanup done.")
 
 if __name__ == "__main__":
