@@ -3,10 +3,13 @@ from PIL import Image, ImageTk, ImageSequence
 import os
 import sys
 
-# Mapping for Belgian/French AZERTY characters to digits
+# Mapping for Belgian/French AZERTY characters to digits (Lower & Upper case)
 AZERTY_MAP = {
     '&': '1', 'é': '2', '"': '3', "'": '4', '(': '5',
     '§': '6', 'è': '7', '!': '8', 'ç': '9', 'à': '0',
+    '1': '1', '2': '2', '3': '3', '4': '4', '5': '5',
+    '6': '6', '7': '7', '8': '8', '9': '9', '0': '0',
+    'À': '0', 'É': '2', 'È': '7', 'Ç': '9', '§': '6',
 }
 
 def decode_barcode(scanned_text):

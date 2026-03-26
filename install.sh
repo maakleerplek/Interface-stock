@@ -5,7 +5,7 @@ set -e
 
 echo "--- Updating system ---"
 sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6 libatlas-base-dev libopenblas-dev python3-lgpio
+sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6 libatlas-base-dev libopenblas-dev python3-lgpio python3-tk
 
 echo "--- Creating Virtual Environment ---"
 if [ ! -d ".venv" ]; then
