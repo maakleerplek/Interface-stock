@@ -42,6 +42,13 @@ else
     echo "Drivers already extracted in lcd_assets/LCD_Module_code."
 fi
 
+echo "--- Downloading Media ---"
+mkdir -p media
+if [ ! -f "media/rickroll.gif" ]; then
+    echo "Downloading Rickroll GIF..."
+    wget -O media/rickroll.gif https://media.tenor.com/o656_i9_9_AAAAAC/rick-astley-never-gonna-give-you-up.gif
+fi
+
 echo ""
 echo "--- Directory Check ---"
 # Updated check path to match extraction

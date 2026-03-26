@@ -23,6 +23,12 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
     python hello_world.py
     ```
 
+5.  **Run the Rickroll GIF example (Fancy!)**:
+    ```bash
+    source .venv/bin/activate
+    python rickroll.py
+    ```
+
 ## Troubleshooting
 
 ### Missing `libopenblas.so.0`
