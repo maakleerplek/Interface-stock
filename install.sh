@@ -5,7 +5,7 @@ set -e
 
 echo "--- Updating system ---"
 sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6
+sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6 libatlas-base-dev libopenblas-dev
 
 echo "--- Creating Virtual Environment ---"
 if [ ! -d ".venv" ]; then
@@ -28,29 +28,28 @@ else
 fi
 
 echo "--- Downloading Waveshare LCD Drivers ---"
-mkdir -p lcd_assets
-cd lcd_assets
-
+# We'll keep the archive in the root or a dedicated folder, but extract to lcd_assets
 if [ ! -f "LCD_Module_RPI_code.7z" ]; then
     echo "Downloading 7z archive..."
     wget -O LCD_Module_RPI_code.7z https://files.waveshare.com/upload/8/8d/LCD_Module_RPI_code.7z || { echo "Download failed!"; exit 1; }
 fi
 
-if [ ! -d "LCD_Module_code" ]; then
-    echo "Extracting drivers..."
-    7z x LCD_Module_RPI_code.7z -O./LCD_Module_code || { echo "Extraction failed!"; exit 1; }
+if [ ! -d "lcd_assets/LCD_Module_code" ]; then
+    echo "Extracting drivers to lcd_assets/LCD_Module_code..."
+    mkdir -p lcd_assets
+    7z x LCD_Module_RPI_code.7z -O./lcd_assets/LCD_Module_code || { echo "Extraction failed!"; exit 1; }
 else
-    echo "Drivers already extracted."
+    echo "Drivers already extracted in lcd_assets/LCD_Module_code."
 fi
-cd ..
 
 echo ""
 echo "--- Directory Check ---"
-if [ -f "lcd_assets/LCD_Module_code/LCD_Module_RPI_code/RaspberryPi/python/lib/tp_config.py" ]; then
+# Updated check path to match extraction
+if find lcd_assets -name "LCD_2inch4.py" | grep -q "."; then
     echo "SUCCESS: Driver files found."
 else
     echo "WARNING: Driver files NOT found in expected location."
-    find lcd_assets -name "tp_config.py" || echo "tp_config.py not found anywhere in lcd_assets."
+    find lcd_assets -name "*.py" | head -n 5 || echo "No python files found in lcd_assets."
 fi
 
 echo ""

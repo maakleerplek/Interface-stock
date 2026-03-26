@@ -6,52 +6,71 @@ from PIL import Image, ImageDraw, ImageFont
 
 # 1. Dynamically find the Waveshare library path
 def find_lib_path():
-    # Search for 'tp_config.py' which is a key part of the driver
-    search_pattern = os.path.join(os.getcwd(), 'lcd_assets', '**', 'tp_config.py')
-    matches = glob.glob(search_pattern, recursive=True)
+    # Search for 'lcdconfig.py' or 'tp_config.py' which are key parts of the driver
+    for config_name in ['lcdconfig.py', 'tp_config.py']:
+        search_pattern = os.path.join(os.getcwd(), 'lcd_assets', '**', config_name)
+        matches = glob.glob(search_pattern, recursive=True)
+        if matches:
+            # We want the parent of 'lib' to be in sys.path so we can do 'from lib import ...'
+            lib_dir = os.path.dirname(matches[0])
+            if os.path.basename(lib_dir) == 'lib':
+                return os.path.dirname(lib_dir) # Return the 'python' directory
+            return lib_dir
     
-    if matches:
-        return os.path.dirname(matches[0])
+    # Check root for LCD_Module_code (as seen in user's manual navigation)
+    for config_name in ['lcdconfig.py', 'tp_config.py']:
+        search_pattern = os.path.join(os.getcwd(), 'LCD_Module_code', '**', config_name)
+        matches = glob.glob(search_pattern, recursive=True)
+        if matches:
+            lib_dir = os.path.dirname(matches[0])
+            if os.path.basename(lib_dir) == 'lib':
+                return os.path.dirname(lib_dir)
+            return lib_dir
     
     # Debug: If not found, list what IS in lcd_assets
-    print("Debug: Listing contents of 'lcd_assets' to find path...")
-    if os.path.exists('lcd_assets'):
-        for root, dirs, files in os.walk('lcd_assets'):
-            level = root.replace('lcd_assets', '').count(os.sep)
-            indent = ' ' * 4 * (level)
-            print(f"{indent}{os.path.basename(root)}/")
-            subindent = ' ' * 4 * (level + 1)
-            for f in files[:5]: # show first 5 files
-                print(f"{subindent}{f}")
-            if len(files) > 5:
-                print(f"{subindent}...")
-            if level > 2: break # Don't go too deep
-    else:
-        print("Debug: 'lcd_assets' folder does not exist at all.")
+    print("Debug: Listing contents of current directory and 'lcd_assets' to find path...")
+    for root_dir in ['.', 'lcd_assets', 'LCD_Module_code']:
+        if os.path.exists(root_dir):
+            print(f"Scanning {root_dir}:")
+            for root, dirs, files in os.walk(root_dir):
+                level = root.replace(root_dir, '').count(os.sep)
+                if level > 4: continue
+                if 'lib' in dirs:
+                    print(f"  Found 'lib' in {root}")
+                if 'lcdconfig.py' in files or 'tp_config.py' in files:
+                    print(f"  Found config in {root}")
         
     return None
 
 lib_path = find_lib_path()
 
 if lib_path and os.path.exists(lib_path):
-    print(f"Using library path: {lib_path}")
+    print(f"Using library base path: {lib_path}")
     sys.path.append(lib_path)
 else:
     print("Error: Library path not found. Please ensure you ran ./install.sh successfully.")
     sys.exit(1)
 
-# 2. Try importing the drivers (handling common naming variations)
+# 2. Try importing the drivers
 try:
-    from tp_config import config
+    from lib import lcdconfig as config
+except ImportError:
     try:
-        import LCD_2inch4 as LCD
+        from lib import tp_config as config
     except ImportError:
-        import LCD_2in4 as LCD
-    
-    print("Drivers loaded successfully.")
-except ImportError as e:
-    print(f"Error: Could not import Waveshare drivers. Details: {e}")
-    sys.exit(1)
+        print("Error: Could not import configuration (lcdconfig or tp_config).")
+        sys.exit(1)
+
+try:
+    from lib import LCD_2inch4 as LCD
+except ImportError:
+    try:
+        from lib import LCD_2in4 as LCD
+    except ImportError:
+        print("Error: Could not import LCD driver (LCD_2inch4 or LCD_2in4).")
+        sys.exit(1)
+
+print("Drivers loaded successfully.")
 
 def main():
     try:
