@@ -12,6 +12,23 @@ def find_lib_path():
     
     if matches:
         return os.path.dirname(matches[0])
+    
+    # Debug: If not found, list what IS in lcd_assets
+    print("Debug: Listing contents of 'lcd_assets' to find path...")
+    if os.path.exists('lcd_assets'):
+        for root, dirs, files in os.walk('lcd_assets'):
+            level = root.replace('lcd_assets', '').count(os.sep)
+            indent = ' ' * 4 * (level)
+            print(f"{indent}{os.path.basename(root)}/")
+            subindent = ' ' * 4 * (level + 1)
+            for f in files[:5]: # show first 5 files
+                print(f"{subindent}{f}")
+            if len(files) > 5:
+                print(f"{subindent}...")
+            if level > 2: break # Don't go too deep
+    else:
+        print("Debug: 'lcd_assets' folder does not exist at all.")
+        
     return None
 
 lib_path = find_lib_path()
