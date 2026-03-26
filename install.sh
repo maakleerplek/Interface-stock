@@ -18,23 +18,39 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-echo "--- Checking SPI Status in /boot/config.txt ---"
+echo "--- Checking SPI Status ---"
 if grep -q "dtparam=spi=on" /boot/config.txt; then
-    echo "SPI is already enabled."
+    echo "SPI is already enabled in /boot/config.txt."
 else
-    echo "Enabling SPI..."
+    echo "Enabling SPI in /boot/config.txt..."
     echo "dtparam=spi=on" | sudo tee -a /boot/config.txt
-    echo "SPI enabled. Please reboot after the script finishes."
+    echo "IMPORTANT: SPI enabled. You MUST reboot after this script finishes."
 fi
 
 echo "--- Downloading Waveshare LCD Drivers ---"
-if [ ! -d "lcd_assets" ]; then
-    mkdir -p lcd_assets && cd lcd_assets
-    wget -O LCD_Module_RPI_code.7z https://files.waveshare.com/upload/8/8d/LCD_Module_RPI_code.7z
-    7z x LCD_Module_RPI_code.7z -O./LCD_Module_code
-    cd ..
+mkdir -p lcd_assets
+cd lcd_assets
+
+if [ ! -f "LCD_Module_RPI_code.7z" ]; then
+    echo "Downloading 7z archive..."
+    wget -O LCD_Module_RPI_code.7z https://files.waveshare.com/upload/8/8d/LCD_Module_RPI_code.7z || { echo "Download failed!"; exit 1; }
+fi
+
+if [ ! -d "LCD_Module_code" ]; then
+    echo "Extracting drivers..."
+    7z x LCD_Module_RPI_code.7z -O./LCD_Module_code || { echo "Extraction failed!"; exit 1; }
 else
-    echo "Drivers already downloaded."
+    echo "Drivers already extracted."
+fi
+cd ..
+
+echo ""
+echo "--- Directory Check ---"
+if [ -f "lcd_assets/LCD_Module_code/LCD_Module_RPI_code/RaspberryPi/python/lib/tp_config.py" ]; then
+    echo "SUCCESS: Driver files found."
+else
+    echo "WARNING: Driver files NOT found in expected location."
+    find lcd_assets -name "tp_config.py" || echo "tp_config.py not found anywhere in lcd_assets."
 fi
 
 echo ""
