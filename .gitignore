@@ -1,0 +1,4 @@
+.venv/
+lcd_assets/
+__pycache__/
+*.pyc
