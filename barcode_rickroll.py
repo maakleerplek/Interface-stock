@@ -44,7 +44,7 @@ def show_rickroll():
 def main():
     print("--- Barcode Scanner Decoder & Rickroll Trigger ---")
     print("Scan a barcode (it will be decoded automatically).")
-    print("Trigger barcode: 541022814235")
+    print("Trigger barcode: 5410228141235")
     print("Press Ctrl+C to exit.")
     
     try:
@@ -58,7 +58,7 @@ def main():
             print(f"Scanned (Raw): {scanned}")
             print(f"Decoded:       {decoded}")
 
-            if decoded == "541022814235":
+            if decoded == "5410228141235":
                 show_rickroll()
             else:
                 print("Status: Barcode not recognized.")
