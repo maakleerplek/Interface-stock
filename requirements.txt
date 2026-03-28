@@ -3,3 +3,4 @@ spidev
 Pillow
 numpy
 lgpio
+requests
