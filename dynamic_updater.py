@@ -5,7 +5,13 @@ import json
 import glob
 import textwrap
 import requests
+import threading
 from PIL import Image, ImageDraw, ImageFont
+
+# --- Global State & Lock ---
+display_lock = threading.Lock()
+current_fact = "Fetching first fact..."
+current_input = "Waiting for input..."
 
 # --- 1. LCD Configuration (Waveshare 2.4inch) ---
 def find_lib_path():
@@ -48,16 +54,6 @@ else:
     print("Warning: Library path not found. Falling back to console mode.")
     HAS_LCD = False
 
-import threading
-
-# --- Global State & Lock ---
-display_lock = threading.Lock()
-current_fact = "Fetching first fact..."
-current_input = "Waiting for input..."
-
-# --- 1. LCD Configuration (Waveshare 2.4inch) ---
-... (rest of the find_lib_path and driver loading logic remains the same) ...
-
 # --- 2. Logic Functions ---
 
 def fetch_random_info():
@@ -93,6 +89,8 @@ def update_display(disp):
             input_wrapped = textwrap.fill(current_input, width=38)
             draw.text((15, 155), input_wrapped, font=body_f, fill=(200, 255, 255))
             
+            # Physical display is 240x320 portrait. 
+            # We draw as 320x240 landscape and rotate.
             rotated_image = image.rotate(90, expand=True)
             disp.ShowImage(rotated_image)
         except Exception as e:
@@ -102,7 +100,8 @@ def fact_worker(disp):
     """Background thread to update facts every 5 seconds."""
     global current_fact
     while True:
-        current_fact = fetch_random_info()
+        new_fact = fetch_random_info()
+        current_fact = new_fact
         if disp:
             update_display(disp)
         time.sleep(5)
@@ -113,13 +112,17 @@ def main():
     global current_input
     disp = None
     if HAS_LCD:
-        if hasattr(LCD, 'LCD_2inch4'):
-            disp = LCD.LCD_2inch4()
-        else:
-            disp = LCD.LCD_2in4()
-        disp.Init()
-        disp.clear()
-        print("LCD initialized.")
+        try:
+            if hasattr(LCD, 'LCD_2inch4'):
+                disp = LCD.LCD_2inch4()
+            else:
+                disp = LCD.LCD_2in4()
+            disp.Init()
+            disp.clear()
+            print("LCD initialized.")
+        except Exception as e:
+            print(f"LCD Init failed: {e}")
+            disp = None
     
     # Start the fact-fetching thread
     t = threading.Thread(target=fact_worker, args=(disp,), daemon=True)
@@ -137,7 +140,6 @@ def main():
                 current_input = user_msg
                 if disp:
                     update_display(disp)
-                # Also print current state to console
                 print(f"[LCD Update] Input set to: {current_input}")
     except KeyboardInterrupt:
         print("\nStopping...")
@@ -147,4 +149,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
