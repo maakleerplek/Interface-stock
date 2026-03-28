@@ -5,3 +5,4 @@ numpy
 lgpio
 requests
 python-dotenv
+evdev
