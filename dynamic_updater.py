@@ -48,6 +48,16 @@ else:
     print("Warning: Library path not found. Falling back to console mode.")
     HAS_LCD = False
 
+import threading
+
+# --- Global State & Lock ---
+display_lock = threading.Lock()
+current_fact = "Fetching first fact..."
+current_input = "Waiting for input..."
+
+# --- 1. LCD Configuration (Waveshare 2.4inch) ---
+... (rest of the find_lib_path and driver loading logic remains the same) ...
+
 # --- 2. Logic Functions ---
 
 def fetch_random_info():
@@ -58,48 +68,49 @@ def fetch_random_info():
         response.raise_for_status()
         return response.json().get("text", "No fact found.")
     except Exception as e:
-        return f"Error fetching: {e}"
+        return f"Error: {e}"
 
-def display_on_lcd(disp, text):
-    """Renders text to the LCD in landscape mode."""
-    try:
-        # Swap width/height for landscape drawing
-        # Waveshare 2.4" is naturally 240x320 (Portrait)
-        # We draw as 320x240 and then rotate.
-        L_WIDTH, L_HEIGHT = disp.height, disp.width 
-        
-        image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (20, 20, 40)) # Dark blue bg
-        draw = ImageDraw.Draw(image)
-        
-        # Font selection
-        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        header_font = ImageFont.truetype(font_path, 24) if os.path.exists(font_path) else ImageFont.load_default()
-        body_font = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-        
-        # In landscape (320px wide), we can fit more characters per line
-        wrapped_text = textwrap.fill(text, width=32)
-        
-        draw.text((20, 20), "FACT UPDATE:", font=header_font, fill=(255, 200, 0))
-        draw.text((20, 60), wrapped_text, font=body_font, fill=(255, 255, 255))
-        
-        # Rotate back to the physical screen orientation (Portrait)
-        rotated_image = image.rotate(90, expand=True)
-        disp.ShowImage(rotated_image)
-    except Exception as e:
-        print(f"LCD Error: {e}")
+def update_display(disp):
+    """Refreshes the LCD with the latest fact and input state."""
+    with display_lock:
+        try:
+            L_WIDTH, L_HEIGHT = disp.height, disp.width 
+            image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (10, 10, 20))
+            draw = ImageDraw.Draw(image)
+            
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
+            body_f = ImageFont.truetype(font_path, 16) if os.path.exists(font_path) else ImageFont.load_default()
+            
+            # --- Top Section: Fact ---
+            draw.rectangle([0, 0, L_WIDTH, 110], fill=(20, 30, 60))
+            draw.text((15, 10), "RANDOM FACT:", font=header_f, fill=(255, 200, 0))
+            fact_wrapped = textwrap.fill(current_fact, width=38)
+            draw.text((15, 35), fact_wrapped, font=body_f, fill=(255, 255, 255))
+            
+            # --- Bottom Section: Input ---
+            draw.text((15, 125), "YOUR LAST INPUT:", font=header_f, fill=(0, 255, 150))
+            input_wrapped = textwrap.fill(current_input, width=38)
+            draw.text((15, 155), input_wrapped, font=body_f, fill=(200, 255, 255))
+            
+            rotated_image = image.rotate(90, expand=True)
+            disp.ShowImage(rotated_image)
+        except Exception as e:
+            print(f"Display Error: {e}")
 
-def display_on_console(text):
-    """Dynamic console output."""
-    os.system('clear' if os.name == 'posix' else 'cls')
-    print("\n" + "="*50)
-    print("      LIVE INFO FEED (Updating every 5s)")
-    print("="*50 + "\n")
-    print(text)
-    print("\n" + "="*50)
+def fact_worker(disp):
+    """Background thread to update facts every 5 seconds."""
+    global current_fact
+    while True:
+        current_fact = fetch_random_info()
+        if disp:
+            update_display(disp)
+        time.sleep(5)
 
 # --- 3. Main Loop ---
 
 def main():
+    global current_input
     disp = None
     if HAS_LCD:
         if hasattr(LCD, 'LCD_2inch4'):
@@ -109,20 +120,25 @@ def main():
         disp.Init()
         disp.clear()
         print("LCD initialized.")
-    else:
-        print("LCD not found, using console mode.")
+    
+    # Start the fact-fetching thread
+    t = threading.Thread(target=fact_worker, args=(disp,), daemon=True)
+    t.start()
 
-    print("Starting loop. Press Ctrl+C to stop.")
+    print("\n--- Integrated Live Display ---")
+    print("Facts update every 5s in background.")
+    print("Type anything below to show it on the LCD.")
+    print("Press Ctrl+C to exit.\n")
+
     try:
         while True:
-            fact = fetch_random_info()
-            
-            if HAS_LCD and disp:
-                display_on_lcd(disp, fact)
-            
-            display_on_console(fact)
-            
-            time.sleep(5)
+            user_msg = input("Input > ").strip()
+            if user_msg:
+                current_input = user_msg
+                if disp:
+                    update_display(disp)
+                # Also print current state to console
+                print(f"[LCD Update] Input set to: {current_input}")
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
@@ -131,3 +147,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
