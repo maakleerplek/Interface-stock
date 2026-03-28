@@ -70,27 +70,35 @@ def update_display(disp):
     """Refreshes the LCD with the latest fact and input state."""
     with display_lock:
         try:
-            L_WIDTH, L_HEIGHT = disp.height, disp.width 
+            # Physical display is 240x320 portrait. 
+            # We draw as 320x240 landscape and rotate.
+            L_WIDTH, L_HEIGHT = 320, 240 # Force logic dimensions
             image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (10, 10, 20))
             draw = ImageDraw.Draw(image)
             
             font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
-            body_f = ImageFont.truetype(font_path, 16) if os.path.exists(font_path) else ImageFont.load_default()
+            header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+            
+            # Dynamic font size for the fact to prevent overflow
+            body_size = 15 if len(current_fact) < 100 else 13
+            body_f = ImageFont.truetype(font_path, body_size) if os.path.exists(font_path) else ImageFont.load_default()
             
             # --- Top Section: Fact ---
-            draw.rectangle([0, 0, L_WIDTH, 110], fill=(20, 30, 60))
-            draw.text((15, 10), "RANDOM FACT:", font=header_f, fill=(255, 200, 0))
-            fact_wrapped = textwrap.fill(current_fact, width=38)
-            draw.text((15, 35), fact_wrapped, font=body_f, fill=(255, 255, 255))
+            # Use a slightly smaller wrap width (32 chars) for 320px
+            draw.rectangle([0, 0, L_WIDTH, 115], fill=(20, 30, 60))
+            draw.text((15, 8), "RANDOM FACT:", font=header_f, fill=(255, 200, 0))
+            
+            # Wrap width 32 is safer for ~300 pixels of usable width
+            fact_wrapped = textwrap.fill(current_fact, width=34 if body_size == 13 else 30)
+            draw.text((15, 32), fact_wrapped, font=body_f, fill=(255, 255, 255))
             
             # --- Bottom Section: Input ---
+            draw.rectangle([0, 117, L_WIDTH, L_HEIGHT], fill=(15, 15, 30))
             draw.text((15, 125), "YOUR LAST INPUT:", font=header_f, fill=(0, 255, 150))
-            input_wrapped = textwrap.fill(current_input, width=38)
+            input_wrapped = textwrap.fill(current_input, width=32)
             draw.text((15, 155), input_wrapped, font=body_f, fill=(200, 255, 255))
             
-            # Physical display is 240x320 portrait. 
-            # We draw as 320x240 landscape and rotate.
+            # Rotate back to the physical screen orientation (Portrait)
             rotated_image = image.rotate(90, expand=True)
             disp.ShowImage(rotated_image)
         except Exception as e:
