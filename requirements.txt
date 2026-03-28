@@ -4,3 +4,4 @@ Pillow
 numpy
 lgpio
 requests
+python-dotenv

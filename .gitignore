@@ -2,3 +2,5 @@
 lcd_assets/
 __pycache__/
 *.pyc
+.env
+random_fact.json
