@@ -27,7 +27,7 @@ INVENTREE_TOKEN = os.getenv("INVENTREE_TOKEN")
 # This maps Linux evdev scan codes to characters for a Belgian/French AZERTY layout
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
-    ecodes.KEY_ENTER: '\n' if HAS_EVDEV else '\n',
+    ecodes.KEY_ENTER: '\n',
 }
 # Fallback character map for manual terminal input
 AZERTY_MAP = {
@@ -143,31 +143,25 @@ def show_item_on_lcd(disp, part_detail):
 
 def find_scanner():
     if not HAS_EVDEV:
-        print("DEBUG: evdev is not available.")
         return None
         
     try:
         device_paths = evdev.list_devices()
         if not device_paths:
-            print("DEBUG: No input devices found at all. Are you running as sudo?")
             return None
             
-        print(f"DEBUG: Found {len(device_paths)} input devices. Scanning names...")
         for path in device_paths:
             try:
                 device = evdev.InputDevice(path)
                 name = device.name.lower()
-                print(f"DEBUG: Checking device at {path}: '{device.name}'")
-                # Broaden search to include generic 'keyboard' if specialized names fail
-                if any(x in name for x in ["scanner", "keyboard", "barcode", "hid"]):
-                    print(f"MATCH: Using device '{device.name}'")
+                # Updated keywords based on your diagnostics
+                if any(x in name for x in ["usbscn", "scanner", "keyboard", "barcode", "hid"]):
+                    print(f"MATCH: Using scanner device '{device.name}' at {path}")
                     return device
-            except PermissionError:
-                print(f"DEBUG: Permission denied for device at {path}. Try running with 'sudo'.")
-            except Exception as e:
-                print(f"DEBUG: Error accessing device at {path}: {e}")
-    except Exception as e:
-        print(f"DEBUG: Critical error in find_scanner: {e}")
+            except:
+                continue
+    except:
+        pass
         
     return None
 
@@ -199,14 +193,13 @@ def main():
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    print("\n--- InvenTree Barcode Scanner (Diagnostics Mode) ---")
+    print("\n--- InvenTree Barcode Scanner ---")
     scanner = find_scanner()
     
     if scanner:
-        print(f"Auto-detected hardware scanner: {scanner.name}")
+        print(f"Hardware scanner active: {scanner.name}")
     else:
-        print("No hardware scanner detected. Falling back to manual terminal input.")
-        print("TIP: If your scanner is plugged in, ensure you are using 'sudo'.")
+        print("No hardware scanner detected. Falling back to terminal input.")
 
     try:
         while True:
@@ -214,7 +207,7 @@ def main():
                 try:
                     barcode = read_from_evdev(scanner)
                 except Exception as e:
-                    print(f"Scanner error: {e}. Falling back to terminal input.")
+                    print(f"Scanner error: {e}. Falling back to terminal.")
                     scanner = None
                     continue
             else:
@@ -223,7 +216,7 @@ def main():
                 barcode = decode_manual_input(scanned)
             
             if not barcode: continue
-            print(f"Processing Barcode: {barcode}")
+            print(f"Scanned Barcode: {barcode}")
             part_detail = get_item_by_barcode(barcode)
             show_item_on_lcd(disp, part_detail)
             
