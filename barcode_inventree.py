@@ -16,7 +16,6 @@ try:
     HAS_EVDEV = True
 except ImportError:
     HAS_EVDEV = False
-    print("Warning: evdev library not found. Run 'pip install evdev'.")
 
 # Load InvenTree credentials
 load_dotenv()
@@ -24,7 +23,7 @@ INVENTREE_URL = os.getenv("INVENTREE_URL", "https://10.72.3.68:8443")
 INVENTREE_TOKEN = os.getenv("INVENTREE_TOKEN")
 
 # AZERTY Scan Code Map (for evdev)
-# This maps Linux evdev scan codes to characters for a Belgian/French AZERTY layout
+# Maps Linux scancodes (1-0 row) to digits for AZERTY layout
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     ecodes.KEY_ENTER: '\n',
@@ -73,23 +72,64 @@ def get_item_by_barcode(barcode):
         print("Error: INVENTREE_TOKEN not configured")
         return None
 
-    url = f"{INVENTREE_URL}/api/barcode/"
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
-    data = {"barcode": barcode}
     
+    # Attempt 1: Use the official Barcode API
+    # This handles InvenTree-internal barcodes
+    print(f"DEBUG: Trying InvenTree Barcode API for '{barcode}'...")
+    url = f"{INVENTREE_URL}/api/barcode/"
+    data = {"barcode": barcode}
     try:
         response = requests.post(url, data=data, headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
-        result = response.json()
-        if "stockitem" in result: return result["stockitem"].get("part_detail")
-        elif "part" in result: return result["part"]
-        return None
+        if response.status_code == 200:
+            result = response.json()
+            if "stockitem" in result: 
+                print("DEBUG: Found StockItem via Barcode API")
+                return result["stockitem"].get("part_detail")
+            elif "part" in result:
+                print("DEBUG: Found Part via Barcode API")
+                return result["part"]
+        else:
+            print(f"DEBUG: Barcode API returned status {response.status_code}")
     except Exception as e:
-        print(f"Error fetching from InvenTree: {e}")
-        return None
+        print(f"DEBUG: Barcode API Exception: {e}")
+
+    # Attempt 2: Search for Part by barcode field
+    # This handles manufacturer barcodes (EAN-13, etc.) stored on the Part
+    print(f"DEBUG: Searching Part Barcode field for '{barcode}'...")
+    try:
+        search_url = f"{INVENTREE_URL}/api/part/?barcode={barcode}"
+        response = requests.get(search_url, headers=headers, timeout=10, verify=False)
+        if response.status_code == 200:
+            results = response.json()
+            # Handle both list and paginated response
+            items = results if isinstance(results, list) else results.get('results', [])
+            if items:
+                print(f"DEBUG: Found Part via search (count: {len(items)})")
+                return items[0]
+    except Exception as e:
+        print(f"DEBUG: Part search exception: {e}")
+
+    # Attempt 3: Search for StockItem by barcode field
+    print(f"DEBUG: Searching StockItem Barcode field for '{barcode}'...")
+    try:
+        search_url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}"
+        response = requests.get(search_url, headers=headers, timeout=10, verify=False)
+        if response.status_code == 200:
+            results = response.json()
+            items = results if isinstance(results, list) else results.get('results', [])
+            if items and "part_detail" in items[0]:
+                print(f"DEBUG: Found StockItem via search")
+                return items[0]["part_detail"]
+    except Exception as e:
+        print(f"DEBUG: StockItem search exception: {e}")
+
+    print("DEBUG: No item found in any search attempt.")
+    return None
 
 def extract_price(part_detail):
     if not part_detail: return "-"
+    # Check multiple fields for price
     for key in ['pricing_min', 'pricing_min_string', 'sell_price']:
         val = part_detail.get(key)
         if val:
@@ -142,27 +182,17 @@ def show_item_on_lcd(disp, part_detail):
 # --- 4. Scanner Logic ---
 
 def find_scanner():
-    if not HAS_EVDEV:
-        return None
-        
+    if not HAS_EVDEV: return None
     try:
         device_paths = evdev.list_devices()
-        if not device_paths:
-            return None
-            
         for path in device_paths:
             try:
                 device = evdev.InputDevice(path)
                 name = device.name.lower()
-                # Updated keywords based on your diagnostics
                 if any(x in name for x in ["usbscn", "scanner", "keyboard", "barcode", "hid"]):
-                    print(f"MATCH: Using scanner device '{device.name}' at {path}")
                     return device
-            except:
-                continue
-    except:
-        pass
-        
+            except: continue
+    except: pass
     return None
 
 def read_from_evdev(device):
@@ -195,7 +225,6 @@ def main():
 
     print("\n--- InvenTree Barcode Scanner ---")
     scanner = find_scanner()
-    
     if scanner:
         print(f"Hardware scanner active: {scanner.name}")
     else:
