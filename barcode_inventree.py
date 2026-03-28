@@ -77,8 +77,6 @@ def fetch_part_details(part_id):
         response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             return response.json()
-        else:
-            print(f"DEBUG: Part fetch failed with status {response.status_code}")
     except Exception as e:
         print(f"DEBUG: Error fetching part {part_id}: {e}")
     return None
@@ -95,37 +93,32 @@ def get_item_by_barcode(barcode):
     url = f"{INVENTREE_URL}/api/barcode/"
     try:
         response = requests.post(url, data={"barcode": barcode}, headers=headers, timeout=5, verify=False)
-        print(f"DEBUG: Barcode API Status: {response.status_code}")
         if response.status_code == 200:
             res = response.json()
-            # Log the full response for debugging
-            print(f"DEBUG: Barcode API Response: {json.dumps(res, indent=2)}")
             
             # Case 1: StockItem found
             if "stockitem" in res:
-                si = res["stockitem"]
-                print("DEBUG: Found StockItem in response")
-                # si might be a dict or an ID
-                if isinstance(si, dict):
+                si_wrapper = res["stockitem"]
+                # InvenTree often wraps the actual data in 'instance'
+                si = si_wrapper.get("instance") if isinstance(si_wrapper, dict) else None
+                
+                if si:
+                    print(f"DEBUG: Found StockItem instance for Part ID {si.get('part')}")
                     part_detail = si.get("part_detail")
                     if part_detail: return part_detail
                     return fetch_part_details(si.get("part"))
-                else:
-                    # In some InvenTree versions, 'stockitem' might just be the ID
-                    print(f"DEBUG: 'stockitem' is not a dict (value: {si})")
-                    # If we can't get part ID from here, we'll fall back to other searches
+                elif isinstance(si_wrapper, dict):
+                    # Fallback if 'instance' is missing but si_wrapper is a dict
+                    return si_wrapper.get("part_detail") or fetch_part_details(si_wrapper.get("part"))
             
             # Case 2: Part found
             if "part" in res:
-                p = res["part"]
-                print("DEBUG: Found Part in response")
+                p_wrapper = res["part"]
+                p = p_wrapper.get("instance") if isinstance(p_wrapper, dict) else p_wrapper
                 if isinstance(p, dict):
                     return p
-                else:
-                    return fetch_part_details(p)
+                return fetch_part_details(p)
                     
-        else:
-            print(f"DEBUG: Barcode API returned status {response.status_code}")
     except Exception as e:
         print(f"DEBUG: Barcode API Error: {e}")
 
@@ -161,6 +154,7 @@ def get_item_by_barcode(barcode):
 
 def extract_price(part_detail):
     if not part_detail: return "-"
+    # Match Tv-Presentation logic
     if part_detail.get('pricing_min'):
         return f"EUR {float(part_detail['pricing_min']):.2f}"
     if part_detail.get('pricing_min_string'):
