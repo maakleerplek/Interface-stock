@@ -28,6 +28,7 @@ SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     ecodes.KEY_ENTER: '\n',
 }
+
 # Fallback character map for manual terminal input
 AZERTY_MAP = {
     '&': '1', 'é': '2', '"': '3', "'": '4', '(': '5',
@@ -74,67 +75,62 @@ def get_item_by_barcode(barcode):
 
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
     
-    # Attempt 1: Use the official Barcode API
-    # This handles InvenTree-internal barcodes
-    print(f"DEBUG: Trying InvenTree Barcode API for '{barcode}'...")
+    # --- Attempt 1: Barcode API (Direct Match) ---
+    print(f"DEBUG: Checking Barcode API for '{barcode}'...")
     url = f"{INVENTREE_URL}/api/barcode/"
-    data = {"barcode": barcode}
     try:
-        response = requests.post(url, data=data, headers=headers, timeout=10, verify=False)
+        response = requests.post(url, data={"barcode": barcode}, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
-            result = response.json()
-            if "stockitem" in result: 
+            res = response.json()
+            if "stockitem" in res:
                 print("DEBUG: Found StockItem via Barcode API")
-                return result["stockitem"].get("part_detail")
-            elif "part" in result:
+                return res["stockitem"].get("part_detail")
+            if "part" in res:
                 print("DEBUG: Found Part via Barcode API")
-                return result["part"]
-        else:
-            print(f"DEBUG: Barcode API returned status {response.status_code}")
+                return res["part"]
     except Exception as e:
-        print(f"DEBUG: Barcode API Exception: {e}")
+        print(f"DEBUG: Barcode API Error: {e}")
 
-    # Attempt 2: Search for Part by barcode field
-    # This handles manufacturer barcodes (EAN-13, etc.) stored on the Part
-    print(f"DEBUG: Searching Part Barcode field for '{barcode}'...")
+    # --- Attempt 2: Search Part by Barcode field ---
+    print(f"DEBUG: Searching Part field for '{barcode}'...")
     try:
-        search_url = f"{INVENTREE_URL}/api/part/?barcode={barcode}"
-        response = requests.get(search_url, headers=headers, timeout=10, verify=False)
+        url = f"{INVENTREE_URL}/api/part/?barcode={barcode}"
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
-            results = response.json()
-            # Handle both list and paginated response
-            items = results if isinstance(results, list) else results.get('results', [])
-            if items:
-                print(f"DEBUG: Found Part via search (count: {len(items)})")
-                return items[0]
+            items = response.json()
+            results = items if isinstance(items, list) else items.get("results", [])
+            if results:
+                print("DEBUG: Found Part via Barcode field search")
+                return results[0]
     except Exception as e:
-        print(f"DEBUG: Part search exception: {e}")
+        print(f"DEBUG: Part Field Search Error: {e}")
 
-    # Attempt 3: Search for StockItem by barcode field
-    print(f"DEBUG: Searching StockItem Barcode field for '{barcode}'...")
+    # --- Attempt 3: General Search (Tv-Presentation style) ---
+    # Sometimes barcodes are in 'IPN' or 'keywords'
+    print(f"DEBUG: Trying General Part search for '{barcode}'...")
     try:
-        search_url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}"
-        response = requests.get(search_url, headers=headers, timeout=10, verify=False)
+        url = f"{INVENTREE_URL}/api/part/?search={barcode}"
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
-            results = response.json()
-            items = results if isinstance(results, list) else results.get('results', [])
-            if items and "part_detail" in items[0]:
-                print(f"DEBUG: Found StockItem via search")
-                return items[0]["part_detail"]
+            items = response.json()
+            results = items if isinstance(items, list) else items.get("results", [])
+            if results:
+                print("DEBUG: Found Part via General search")
+                return results[0]
     except Exception as e:
-        print(f"DEBUG: StockItem search exception: {e}")
+        print(f"DEBUG: General Search Error: {e}")
 
-    print("DEBUG: No item found in any search attempt.")
     return None
 
 def extract_price(part_detail):
     if not part_detail: return "-"
-    # Check multiple fields for price
-    for key in ['pricing_min', 'pricing_min_string', 'sell_price']:
-        val = part_detail.get(key)
-        if val:
-            try: return f"EUR {float(val):.2f}"
-            except: return str(val)
+    # Match Tv-Presentation logic
+    if part_detail.get('pricing_min'):
+        return f"EUR {float(part_detail['pricing_min']):.2f}"
+    if part_detail.get('pricing_min_string'):
+        return part_detail['pricing_min_string']
+    if part_detail.get('sell_price'):
+        return f"EUR {float(part_detail['sell_price']):.2f}"
     return "-"
 
 def get_image(part_detail):
@@ -151,63 +147,60 @@ def get_image(part_detail):
 
 def show_item_on_lcd(disp, part_detail):
     L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (20, 20, 30))
+    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
     draw = ImageDraw.Draw(image)
+    
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
     body_f = ImageFont.truetype(font_path, 16) if os.path.exists(font_path) else ImageFont.load_default()
-    price_f = ImageFont.truetype(font_path, 24) if os.path.exists(font_path) else ImageFont.load_default()
+    price_f = ImageFont.truetype(font_path, 26) if os.path.exists(font_path) else ImageFont.load_default()
 
     if part_detail:
         name = part_detail.get('name', 'Unknown Item')
         price = extract_price(part_detail)
-        draw.rectangle([0, 0, L_WIDTH, 40], fill=(40, 60, 100))
-        draw.text((10, 8), "ITEM FOUND", font=header_f, fill=(255, 255, 255))
-        draw.text((120, 50), textwrap.fill(name, width=25), font=header_f, fill=(255, 200, 0))
-        draw.text((120, 140), "PRICE:", font=body_f, fill=(180, 180, 180))
-        draw.text((120, 165), price, font=price_f, fill=(0, 255, 100))
-        item_img = get_image(part_detail)
-        if item_img:
-            item_img.thumbnail((100, 100))
-            image.paste(item_img, (10, 50))
+        
+        draw.rectangle([0, 0, L_WIDTH, 45], fill=(30, 50, 90))
+        draw.text((12, 10), "ITEM IDENTIFIED", font=header_f, fill=(255, 255, 255))
+        
+        draw.text((120, 60), textwrap.fill(name, width=22), font=header_f, fill=(255, 215, 0))
+        draw.text((120, 150), "UNIT PRICE:", font=body_f, fill=(200, 200, 200))
+        draw.text((120, 175), price, font=price_f, fill=(50, 255, 50))
+        
+        img = get_image(part_detail)
+        if img:
+            img.thumbnail((100, 100))
+            image.paste(img, (10, 60))
+        else:
+            draw.rectangle([10, 60, 110, 160], outline=(80, 80, 80))
+            draw.text((25, 100), "NO IMAGE", font=body_f, fill=(80, 80, 80))
     else:
-        draw.text((50, 100), "ITEM NOT FOUND", font=header_f, fill=(255, 50, 50))
+        draw.text((60, 110), "BARCODE NOT RECOGNIZED", font=header_f, fill=(255, 80, 80))
 
     if HAS_LCD:
         disp.ShowImage(image.rotate(90, expand=True))
     else:
-        print(f"\n[DISPLAY] Name: {part_detail.get('name') if part_detail else 'N/A'}")
-        print(f"[DISPLAY] Price: {extract_price(part_detail) if part_detail else 'N/A'}")
+        print(f"\n[DISPLAY] {part_detail.get('name') if part_detail else 'N/A'} - {extract_price(part_detail)}")
 
-# --- 4. Scanner Logic ---
+# --- 4. Main ---
 
 def find_scanner():
     if not HAS_EVDEV: return None
     try:
-        device_paths = evdev.list_devices()
-        for path in device_paths:
-            try:
-                device = evdev.InputDevice(path)
-                name = device.name.lower()
-                if any(x in name for x in ["usbscn", "scanner", "keyboard", "barcode", "hid"]):
-                    return device
-            except: continue
+        for path in evdev.list_devices():
+            dev = evdev.InputDevice(path)
+            if any(x in dev.name.lower() for x in ["usbscn", "scanner", "keyboard", "barcode", "hid"]):
+                return dev
     except: pass
     return None
 
-def read_from_evdev(device):
+def read_scancode(device):
     barcode = ""
-    print(f"Listening for hardware scans on {device.name}...")
     for event in device.read_loop():
         if event.type == ecodes.EV_KEY:
             data = evdev.categorize(event)
-            if data.keystate == 1: # Key down
-                if data.scancode == ecodes.KEY_ENTER:
-                    ret = barcode
-                    barcode = ""
-                    return ret
-                char = SCAN_CODES.get(data.scancode, "")
-                barcode += char
+            if data.keystate == 1:
+                if data.scancode == ecodes.KEY_ENTER: return barcode
+                barcode += SCAN_CODES.get(data.scancode, "")
     return None
 
 def main():
@@ -223,34 +216,25 @@ def main():
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    print("\n--- InvenTree Barcode Scanner ---")
     scanner = find_scanner()
-    if scanner:
-        print(f"Hardware scanner active: {scanner.name}")
-    else:
-        print("No hardware scanner detected. Falling back to terminal input.")
+    print("\n--- InvenTree Scanner ---")
+    if scanner: print(f"Hardware: {scanner.name}")
+    else: print("Mode: Terminal Input")
 
     try:
         while True:
             if scanner:
-                try:
-                    barcode = read_from_evdev(scanner)
-                except Exception as e:
-                    print(f"Scanner error: {e}. Falling back to terminal.")
-                    scanner = None
-                    continue
+                barcode = read_scancode(scanner)
             else:
-                scanned = input("Scan (Terminal Mode): ").strip()
-                if not scanned: continue
-                barcode = decode_manual_input(scanned)
+                raw = input("Scan: ").strip()
+                barcode = decode_manual_input(raw) if raw else ""
             
-            if not barcode: continue
-            print(f"Scanned Barcode: {barcode}")
-            part_detail = get_item_by_barcode(barcode)
-            show_item_on_lcd(disp, part_detail)
-            
+            if barcode:
+                print(f"Querying: {barcode}")
+                part = get_item_by_barcode(barcode)
+                show_item_on_lcd(disp, part)
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\nExiting...")
     finally:
         if HAS_LCD and 'config' in globals() and hasattr(config, 'module_exit'):
             config.module_exit()
