@@ -83,20 +83,20 @@ def update_display(disp):
             body_size = 15 if len(current_fact) < 100 else 13
             body_f = ImageFont.truetype(font_path, body_size) if os.path.exists(font_path) else ImageFont.load_default()
             
-            # --- Top Section: Fact ---
-            # Use a slightly smaller wrap width (32 chars) for 320px
-            draw.rectangle([0, 0, L_WIDTH, 115], fill=(20, 30, 60))
-            draw.text((15, 8), "RANDOM FACT:", font=header_f, fill=(255, 200, 0))
+            # --- Top Section: Fact (Expanded) ---
+            # Move the split line down from 115 to 145
+            draw.rectangle([0, 0, L_WIDTH, 145], fill=(20, 30, 60))
+            draw.text((15, 10), "RANDOM FACT:", font=header_f, fill=(255, 200, 0))
             
             # Wrap width 32 is safer for ~300 pixels of usable width
             fact_wrapped = textwrap.fill(current_fact, width=34 if body_size == 13 else 30)
-            draw.text((15, 32), fact_wrapped, font=body_f, fill=(255, 255, 255))
+            draw.text((15, 35), fact_wrapped, font=body_f, fill=(255, 255, 255))
             
-            # --- Bottom Section: Input ---
-            draw.rectangle([0, 117, L_WIDTH, L_HEIGHT], fill=(15, 15, 30))
-            draw.text((15, 125), "YOUR LAST INPUT:", font=header_f, fill=(0, 255, 150))
+            # --- Bottom Section: Input (Smaller) ---
+            draw.rectangle([0, 147, L_WIDTH, L_HEIGHT], fill=(15, 15, 30))
+            draw.text((15, 155), "YOUR LAST INPUT:", font=header_f, fill=(0, 255, 150))
             input_wrapped = textwrap.fill(current_input, width=32)
-            draw.text((15, 155), input_wrapped, font=body_f, fill=(200, 255, 255))
+            draw.text((15, 185), input_wrapped, font=body_f, fill=(200, 255, 255))
             
             # Rotate back to the physical screen orientation (Portrait)
             rotated_image = image.rotate(90, expand=True)
