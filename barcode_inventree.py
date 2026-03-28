@@ -96,71 +96,78 @@ def get_item_by_barcode(barcode):
         if response.status_code == 200:
             res = response.json()
             
-            # Case 1: StockItem found
+            # Helper to extract part detail from various response structures
+            def extract_from_obj(obj):
+                if not isinstance(obj, dict): return None
+                # Check instance wrapper first
+                instance = obj.get("instance")
+                if isinstance(instance, dict):
+                    return instance.get("part_detail") or fetch_part_details(instance.get("part"))
+                # Then check direct fields
+                return obj.get("part_detail") or fetch_part_details(obj.get("part"))
+
             if "stockitem" in res:
-                si_wrapper = res["stockitem"]
-                # InvenTree often wraps the actual data in 'instance'
-                si = si_wrapper.get("instance") if isinstance(si_wrapper, dict) else None
-                
-                if si:
-                    print(f"DEBUG: Found StockItem instance for Part ID {si.get('part')}")
-                    part_detail = si.get("part_detail")
-                    if part_detail: return part_detail
-                    return fetch_part_details(si.get("part"))
-                elif isinstance(si_wrapper, dict):
-                    # Fallback if 'instance' is missing but si_wrapper is a dict
-                    return si_wrapper.get("part_detail") or fetch_part_details(si_wrapper.get("part"))
+                print("DEBUG: Processing StockItem match")
+                part = extract_from_obj(res["stockitem"])
+                if part: return part
             
-            # Case 2: Part found
             if "part" in res:
-                p_wrapper = res["part"]
-                p = p_wrapper.get("instance") if isinstance(p_wrapper, dict) else p_wrapper
-                if isinstance(p, dict):
-                    return p
-                return fetch_part_details(p)
+                print("DEBUG: Processing Part match")
+                # For a direct part match, the 'part' object might be the part itself or have an 'instance'
+                p_obj = res["part"]
+                if isinstance(p_obj, dict):
+                    if "instance" in p_obj: return p_obj["instance"]
+                    if "name" in p_obj: return p_obj
+                return fetch_part_details(p_obj)
                     
     except Exception as e:
         print(f"DEBUG: Barcode API Error: {e}")
 
-    # --- Attempt 2: Search Part by Barcode field ---
-    print(f"DEBUG: Searching Part field for '{barcode}'...")
+    # --- Attempt 2: Search Part by EXACT Barcode field ---
+    print(f"DEBUG: Searching Part barcode field for '{barcode}'...")
     try:
+        # Using ?barcode= is an exact filter in InvenTree
         url = f"{INVENTREE_URL}/api/part/?barcode={barcode}"
         response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             items = response.json()
             results = items if isinstance(items, list) else items.get("results", [])
-            if results:
-                print(f"DEBUG: Found Part via field search: {results[0].get('name')}")
-                return results[0]
+            for item in results:
+                # Extra safety check for exact match
+                if item.get("barcode") == barcode or item.get("IPN") == barcode:
+                    print(f"DEBUG: Found exact match: {item.get('name')}")
+                    return item
     except Exception as e:
         print(f"DEBUG: Part Field Search Error: {e}")
 
-    # --- Attempt 3: General Search (search=) ---
-    print(f"DEBUG: Trying General Part search for '{barcode}'...")
+    # --- Attempt 3: Search StockItem by EXACT Barcode field ---
+    print(f"DEBUG: Searching StockItem barcode field for '{barcode}'...")
     try:
-        url = f"{INVENTREE_URL}/api/part/?search={barcode}"
+        url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}"
         response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             items = response.json()
             results = items if isinstance(items, list) else items.get("results", [])
-            if results:
-                print(f"DEBUG: Found Part via general search: {results[0].get('name')}")
-                return results[0]
+            for item in results:
+                if item.get("barcode") == barcode:
+                    print(f"DEBUG: Found StockItem match, fetching part details")
+                    return item.get("part_detail") or fetch_part_details(item.get("part"))
     except Exception as e:
-        print(f"DEBUG: General Search Error: {e}")
+        print(f"DEBUG: StockItem Field Search Error: {e}")
 
     return None
 
 def extract_price(part_detail):
     if not part_detail: return "-"
-    # Match Tv-Presentation logic
+    # pricing_min is usually the most reliable field
     if part_detail.get('pricing_min'):
-        return f"EUR {float(part_detail['pricing_min']):.2f}"
+        try: return f"EUR {float(part_detail['pricing_min']):.2f}"
+        except: pass
     if part_detail.get('pricing_min_string'):
         return part_detail['pricing_min_string']
     if part_detail.get('sell_price'):
-        return f"EUR {float(part_detail['sell_price']):.2f}"
+        try: return f"EUR {float(part_detail['sell_price']):.2f}"
+        except: pass
     return "-"
 
 def get_image(part_detail):
@@ -228,9 +235,14 @@ def read_scancode(device):
     for event in device.read_loop():
         if event.type == ecodes.EV_KEY:
             data = evdev.categorize(event)
-            if data.keystate == 1:
-                if data.scancode == ecodes.KEY_ENTER: return barcode
-                barcode += SCAN_CODES.get(data.scancode, "")
+            if data.keystate == 1: # Key Down
+                if data.scancode == ecodes.KEY_ENTER:
+                    res = barcode
+                    barcode = ""
+                    if res: return res
+                else:
+                    char = SCAN_CODES.get(data.scancode, "")
+                    barcode += char
     return None
 
 def main():
@@ -251,6 +263,7 @@ def main():
     if scanner: print(f"Hardware: {scanner.name}")
     else: print("Mode: Terminal Input")
 
+    last_scan_time = 0
     try:
         while True:
             if scanner:
@@ -259,10 +272,13 @@ def main():
                 raw = input("Scan: ").strip()
                 barcode = decode_manual_input(raw) if raw else ""
             
+            # Debounce: Ignore identical scans within 1 second
+            current_time = time.time()
             if barcode:
                 print(f"Querying: {barcode}")
                 part = get_item_by_barcode(barcode)
                 show_item_on_lcd(disp, part)
+                last_scan_time = current_time
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
