@@ -9,29 +9,43 @@ from PIL import Image, ImageDraw, ImageFont
 
 # --- 1. LCD Configuration (Waveshare 2.4inch) ---
 def find_lib_path():
-    for config_name in ['lcdconfig.py', 'tp_config.py']:
-        search_pattern = os.path.join(os.getcwd(), 'lcd_assets', '**', config_name)
-        matches = glob.glob(search_pattern, recursive=True)
-        if matches:
-            lib_dir = os.path.dirname(matches[0])
-            return os.path.dirname(lib_dir) if os.path.basename(lib_dir) == 'lib' else lib_dir
+    # Search for 'lcdconfig.py' or 'tp_config.py' which are key parts of the driver
+    for root_dir in ['.', 'lcd_assets', 'LCD_Module_code']:
+        if not os.path.exists(root_dir): continue
+        for config_name in ['lcdconfig.py', 'tp_config.py']:
+            search_pattern = os.path.join(os.getcwd(), root_dir, '**', config_name)
+            matches = glob.glob(search_pattern, recursive=True)
+            if matches:
+                lib_dir = os.path.dirname(matches[0])
+                if os.path.basename(lib_dir) == 'lib':
+                    return os.path.dirname(lib_dir)
+                return lib_dir
     return None
 
 lib_path = find_lib_path()
+
 if lib_path and os.path.exists(lib_path):
+    print(f"Using library base path: {lib_path}")
     sys.path.append(lib_path)
+    # Try importing the drivers
     try:
-        from lib import lcdconfig as config
-        from lib import LCD_2inch4 as LCD
-        HAS_LCD = True
-    except ImportError:
         try:
-            from lib import tp_config as config
-            from lib import LCD_2in4 as LCD
-            HAS_LCD = True
+            from lib import lcdconfig as config
         except ImportError:
-            HAS_LCD = False
+            from lib import tp_config as config
+        
+        try:
+            from lib import LCD_2inch4 as LCD
+        except ImportError:
+            from lib import LCD_2in4 as LCD
+        
+        HAS_LCD = True
+        print("Drivers loaded successfully.")
+    except ImportError:
+        print("Warning: Drivers found but could not be imported.")
+        HAS_LCD = False
 else:
+    print("Warning: Library path not found. Falling back to console mode.")
     HAS_LCD = False
 
 # --- 2. Logic Functions ---
