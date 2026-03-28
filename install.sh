@@ -57,6 +57,26 @@ else
 fi
 
 echo ""
+echo "--- Setting up InvenTree Scanner Auto-Start ---"
+if [ -f "inventree-scanner.service" ]; then
+    echo "Installing systemd service..."
+    # Ensure paths in the service file are correct for the current directory
+    # (assuming we are in /home/pi/Interface-stock)
+    sudo cp inventree-scanner.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable inventree-scanner.service
+    echo "Service enabled. It will start on boot."
+else
+    echo "WARNING: inventree-scanner.service not found. Skipping auto-start setup."
+fi
+
+echo ""
 echo "--- Setup Complete ---"
 echo "To run the hello world script, use:"
 echo "source .venv/bin/activate && python hello_world.py"
+echo ""
+echo "To manually start the InvenTree scanner service:"
+echo "sudo systemctl start inventree-scanner.service"
+echo ""
+echo "To check scanner logs:"
+echo "sudo journalctl -u inventree-scanner.service -f"
