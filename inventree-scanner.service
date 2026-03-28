@@ -1,0 +1,15 @@
+[Unit]
+Description=InvenTree Barcode Scanner Service
+After=network.target
+
+[Service]
+# Use the python binary from the virtual environment
+ExecStart=/home/pi/Interface-stock/.venv/bin/python /home/pi/Interface-stock/barcode_inventree.py
+WorkingDirectory=/home/pi/Interface-stock
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
