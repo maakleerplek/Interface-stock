@@ -68,6 +68,20 @@ if lib_path and os.path.exists(lib_path):
 
 # --- 2. InvenTree API Functions ---
 
+def fetch_part_details(part_id):
+    """Fetch full part details by ID."""
+    if not part_id: return None
+    headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
+    url = f"{INVENTREE_URL}/api/part/{part_id}/"
+    try:
+        print(f"DEBUG: Fetching full details for part ID {part_id}...")
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"DEBUG: Error fetching part {part_id}: {e}")
+    return None
+
 def get_item_by_barcode(barcode):
     if not INVENTREE_TOKEN:
         print("Error: INVENTREE_TOKEN not configured")
@@ -82,9 +96,16 @@ def get_item_by_barcode(barcode):
         response = requests.post(url, data={"barcode": barcode}, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             res = response.json()
+            # Case 1: StockItem found
             if "stockitem" in res:
+                si = res["stockitem"]
                 print("DEBUG: Found StockItem via Barcode API")
-                return res["stockitem"].get("part_detail")
+                # Return part_detail if present, otherwise fetch manually
+                part_detail = si.get("part_detail")
+                if part_detail: return part_detail
+                return fetch_part_details(si.get("part"))
+            
+            # Case 2: Part found
             if "part" in res:
                 print("DEBUG: Found Part via Barcode API")
                 return res["part"]
@@ -105,8 +126,7 @@ def get_item_by_barcode(barcode):
     except Exception as e:
         print(f"DEBUG: Part Field Search Error: {e}")
 
-    # --- Attempt 3: General Search (Tv-Presentation style) ---
-    # Sometimes barcodes are in 'IPN' or 'keywords'
+    # --- Attempt 3: General Search (search=) ---
     print(f"DEBUG: Trying General Part search for '{barcode}'...")
     try:
         url = f"{INVENTREE_URL}/api/part/?search={barcode}"
