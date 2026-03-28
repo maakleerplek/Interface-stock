@@ -61,21 +61,30 @@ def fetch_random_info():
         return f"Error fetching: {e}"
 
 def display_on_lcd(disp, text):
-    """Renders text to the LCD."""
+    """Renders text to the LCD in landscape mode."""
     try:
-        width, height = disp.width, disp.height
-        image = Image.new('RGB', (width, height), (20, 20, 40)) # Dark blue bg
+        # Swap width/height for landscape drawing
+        # Waveshare 2.4" is naturally 240x320 (Portrait)
+        # We draw as 320x240 and then rotate.
+        L_WIDTH, L_HEIGHT = disp.height, disp.width 
+        
+        image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (20, 20, 40)) # Dark blue bg
         draw = ImageDraw.Draw(image)
         
         # Font selection
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        font = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
+        header_font = ImageFont.truetype(font_path, 24) if os.path.exists(font_path) else ImageFont.load_default()
+        body_font = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
         
-        wrapped_text = textwrap.fill(text, width=22)
-        draw.text((10, 40), "FACT UPDATE:", font=font, fill=(255, 200, 0))
-        draw.text((10, 80), wrapped_text, font=font, fill=(255, 255, 255))
+        # In landscape (320px wide), we can fit more characters per line
+        wrapped_text = textwrap.fill(text, width=32)
         
-        disp.ShowImage(image)
+        draw.text((20, 20), "FACT UPDATE:", font=header_font, fill=(255, 200, 0))
+        draw.text((20, 60), wrapped_text, font=body_font, fill=(255, 255, 255))
+        
+        # Rotate back to the physical screen orientation (Portrait)
+        rotated_image = image.rotate(90, expand=True)
+        disp.ShowImage(rotated_image)
     except Exception as e:
         print(f"LCD Error: {e}")
 
