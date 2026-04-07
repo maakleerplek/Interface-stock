@@ -44,12 +44,43 @@ The `barcode_inventree.py` script is a complete shopping cart system with InvenT
 ### Setup
 
 1. **Configure `.env`**:
-   ```env
-   INVENTREE_URL=https://10.72.3.68:8443
-   INVENTREE_TOKEN=your-api-token
-   HTL_NAME=Your Makerspace Name
-   HTL_CODE=Your Makerspace Code
+   
+   The project uses environment variables for sensitive configuration. These are stored as GitHub secrets.
+   
+   **Option A: Use the setup script** (creates template):
+   ```bash
+   ./setup_env.sh
    ```
+   This creates a `.env` file with placeholders. You'll need to fill in the actual values.
+   
+   **Option B: Manual setup**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   nano .env
+   ```
+   
+   **Option C: Retrieve from GitHub** (requires access):
+   
+   If you have repository access, view secrets at:
+   ```
+   https://github.com/maakleerplek/Interface-stock/settings/secrets/actions
+   ```
+   
+   Or use GitHub CLI:
+   ```bash
+   # List available secrets
+   gh secret list
+   
+   # Note: GitHub secrets cannot be read for security reasons
+   # Contact repository admin for values
+   ```
+   
+   Required variables:
+   - `INVENTREE_URL` - InvenTree instance URL
+   - `INVENTREE_TOKEN` - API token for authentication
+   - `VITE_PAYMENT_NAME` - Makerspace/organization name for payments
+   - `VITE_PAYMENT_IBAN` - IBAN for payment QR codes
 
 2. **Install dependencies**:
    ```bash
@@ -87,6 +118,22 @@ The `barcode_inventree.py` script is a complete shopping cart system with InvenT
 The system automatically extracts categories from InvenTree and generates a description for the payment:
 - Example: "HTL Makerspace - drink - wood - electronics"
 - This helps identify what was purchased in bank statements
+
+## Security
+
+### Secrets Management
+
+Sensitive credentials are stored as GitHub repository secrets and should never be committed to the repository. The `.env` file is in `.gitignore` to prevent accidental commits.
+
+**For administrators**: Set secrets using GitHub CLI:
+```bash
+gh secret set INVENTREE_TOKEN --body "your-token-here"
+gh secret set INVENTREE_URL --body "https://your-server:8443"
+gh secret set VITE_PAYMENT_NAME --body "Your Organization Name"
+gh secret set VITE_PAYMENT_IBAN --body "BE00000000000000"
+```
+
+**For users**: Contact repository administrators for access to credentials, or use the setup script which creates a template `.env` file.
 
 ### Troubleshooting
 
