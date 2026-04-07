@@ -1,15 +1,16 @@
 [Unit]
-Description=InvenTree Barcode Scanner Service
+Description=InvenTree Shopping System Service
 After=network.target
 
 [Service]
 # Use the python binary from the virtual environment
-ExecStart=/home/pi/Interface-stock/.venv/bin/python /home/pi/Interface-stock/barcode_inventree.py
-WorkingDirectory=/home/pi/Interface-stock
-StandardOutput=inherit
-StandardError=inherit
+ExecStart=__INSTALL_DIR__/.venv/bin/python __INSTALL_DIR__/barcode_inventree.py
+WorkingDirectory=__INSTALL_DIR__
+StandardOutput=journal
+StandardError=journal
 Restart=always
-User=root
+User=__USER__
+Environment="PYTHONUNBUFFERED=1"
 
 [Install]
 WantedBy=multi-user.target

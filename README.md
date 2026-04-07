@@ -10,12 +10,18 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
     chmod +x install.sh
     ./install.sh
     ```
-    *Note: This script will install system dependencies, create a virtual environment, and download the necessary Waveshare drivers.*
+    *Note: This script will:*
+    - Install system dependencies
+    - Create a virtual environment
+    - Download Waveshare drivers
+    - Set up auto-start service for the shopping system
+    - Ask if you want to start the service immediately
 
 3.  **Reboot** (if SPI was not already enabled):
     ```bash
     sudo reboot
     ```
+    After reboot, the shopping system will start automatically!
 
 4.  **Run the InvenTree Shopping System**:
     ```bash
@@ -119,6 +125,49 @@ The `barcode_inventree.py` script is a complete shopping cart system with InvenT
 The system automatically extracts categories from InvenTree and generates a description for the payment:
 - Example: "HTL Makerspace - drink - wood - electronics"
 - This helps identify what was purchased in bank statements
+
+## Auto-Start on Boot
+
+The installation script automatically sets up a systemd service that runs the shopping system on boot.
+
+### Service Management
+
+```bash
+# Start the service
+sudo systemctl start inventree-scanner.service
+
+# Stop the service
+sudo systemctl stop inventree-scanner.service
+
+# Restart the service
+sudo systemctl restart inventree-scanner.service
+
+# Check service status
+sudo systemctl status inventree-scanner.service
+
+# View live logs
+sudo journalctl -u inventree-scanner.service -f
+
+# Disable auto-start
+sudo systemctl disable inventree-scanner.service
+
+# Re-enable auto-start
+sudo systemctl enable inventree-scanner.service
+```
+
+### Manual Operation
+
+If you prefer to run the system manually without auto-start:
+
+```bash
+# Disable the service
+sudo systemctl disable inventree-scanner.service
+sudo systemctl stop inventree-scanner.service
+
+# Run manually
+source .venv/bin/activate
+python barcode_inventree.py
+```
 
 ## Security
 

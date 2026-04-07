@@ -57,26 +57,70 @@ else
 fi
 
 echo ""
-echo "--- Setting up InvenTree Scanner Auto-Start ---"
+echo "--- Setting up InvenTree Shopping System Auto-Start ---"
 if [ -f "inventree-scanner.service" ]; then
     echo "Installing systemd service..."
-    # Ensure paths in the service file are correct for the current directory
-    # (assuming we are in /home/pi/Interface-stock)
-    sudo cp inventree-scanner.service /etc/systemd/system/
+    
+    # Get the current directory and user
+    INSTALL_DIR=$(pwd)
+    CURRENT_USER=$(whoami)
+    
+    # Create a temporary service file with the correct paths
+    sed -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+        -e "s|__USER__|${CURRENT_USER}|g" \
+        inventree-scanner.service > /tmp/inventree-scanner.service
+    
+    # Install the service
+    sudo cp /tmp/inventree-scanner.service /etc/systemd/system/inventree-scanner.service
     sudo systemctl daemon-reload
     sudo systemctl enable inventree-scanner.service
-    echo "Service enabled. It will start on boot."
+    
+    # Ask if user wants to start now
+    echo ""
+    read -p "Do you want to start the shopping system now? (y/n) " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        sudo systemctl start inventree-scanner.service
+        echo "Service started!"
+        echo ""
+        echo "View live logs with:"
+        echo "sudo journalctl -u inventree-scanner.service -f"
+    else
+        echo "Service will start automatically on next boot."
+        echo "To start manually: sudo systemctl start inventree-scanner.service"
+    fi
+    
+    # Cleanup
+    rm -f /tmp/inventree-scanner.service
+    
+    echo ""
+    echo "Service installed and enabled for auto-start on boot."
 else
     echo "WARNING: inventree-scanner.service not found. Skipping auto-start setup."
 fi
 
 echo ""
 echo "--- Setup Complete ---"
-echo "To run the hello world script, use:"
-echo "source .venv/bin/activate && python hello_world.py"
 echo ""
-echo "To manually start the InvenTree scanner service:"
-echo "sudo systemctl start inventree-scanner.service"
+echo "==================================================================="
+echo "  InvenTree Shopping System - Setup Complete"
+echo "==================================================================="
 echo ""
-echo "To check scanner logs:"
-echo "sudo journalctl -u inventree-scanner.service -f"
+echo "📦 To test demo scripts:"
+echo "   source .venv/bin/activate && python fun/hello_world.py"
+echo ""
+echo "🛒 To run the shopping system manually:"
+echo "   source .venv/bin/activate && python barcode_inventree.py"
+echo ""
+echo "🔧 Service management commands:"
+echo "   Start:   sudo systemctl start inventree-scanner.service"
+echo "   Stop:    sudo systemctl stop inventree-scanner.service"
+echo "   Restart: sudo systemctl restart inventree-scanner.service"
+echo "   Status:  sudo systemctl status inventree-scanner.service"
+echo "   Logs:    sudo journalctl -u inventree-scanner.service -f"
+echo ""
+echo "⚙️  Disable auto-start:"
+echo "   sudo systemctl disable inventree-scanner.service"
+echo ""
+echo "==================================================================="
+echo ""
