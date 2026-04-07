@@ -15,9 +15,18 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
     - Create a virtual environment
     - Download Waveshare drivers
     - Set up auto-start service for the shopping system
+    - Configure auto-activation of virtual environment
     - Ask if you want to start the service immediately
 
-3.  **Reboot** (if SPI was not already enabled):
+3.  **Reload your shell** to activate the virtual environment:
+    ```bash
+    source ~/.bashrc
+    # Or simply close and reopen your terminal
+    ```
+    
+    You should see: `✓ Interface-stock virtual environment activated`
+
+4.  **Reboot** (if SPI was not already enabled):
     ```bash
     sudo reboot
     ```
@@ -25,16 +34,36 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
 
 4.  **Run the InvenTree Shopping System**:
     ```bash
-    source .venv/bin/activate
+    # No need to activate venv - it's automatic!
     python barcode_inventree.py
     ```
 
 5.  **Try the demo scripts** (optional):
     ```bash
-    source .venv/bin/activate
     python fun/hello_world.py
     ```
     See `fun/README.md` for more demo scripts!
+
+## Virtual Environment Auto-Activation
+
+The install script automatically configures your shell to activate the virtual environment when you log in. This means you don't need to run `source .venv/bin/activate` every time!
+
+### How it works:
+- When you open a terminal, the virtual environment activates automatically
+- You'll see: `✓ Interface-stock virtual environment activated`
+- You can immediately run Python scripts without manual activation
+
+### Manual control:
+```bash
+# Deactivate if needed
+deactivate
+
+# Reactivate manually
+source ~/Interface-stock/.venv/bin/activate
+```
+
+### Disable auto-activation:
+If you prefer to activate manually, edit `~/.bashrc` and remove the "Interface-stock auto-venv" section.
 
 ## InvenTree Shopping System
 

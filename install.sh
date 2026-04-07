@@ -57,6 +57,29 @@ else
 fi
 
 echo ""
+echo "--- Setting up Auto-Activate Virtual Environment ---"
+# Add virtual environment auto-activation to .bashrc
+BASHRC="$HOME/.bashrc"
+VENV_MARKER="# Interface-stock auto-venv"
+
+if ! grep -q "$VENV_MARKER" "$BASHRC" 2>/dev/null; then
+    echo "Adding auto-activation to $BASHRC..."
+    cat >> "$BASHRC" << 'EOF'
+
+# Interface-stock auto-venv
+# Auto-activate virtual environment for Interface-stock project
+if [ -d "$HOME/Interface-stock/.venv" ] && [ -z "$VIRTUAL_ENV" ]; then
+    source "$HOME/Interface-stock/.venv/bin/activate"
+    echo "✓ Interface-stock virtual environment activated"
+fi
+EOF
+    echo "Auto-activation added to .bashrc"
+    echo "Run 'source ~/.bashrc' or open a new terminal to activate."
+else
+    echo "Auto-activation already configured in .bashrc"
+fi
+
+echo ""
 echo "--- Setting up InvenTree Shopping System Auto-Start ---"
 if [ -f "inventree-scanner.service" ]; then
     echo "Installing systemd service..."
@@ -106,11 +129,14 @@ echo "==================================================================="
 echo "  InvenTree Shopping System - Setup Complete"
 echo "==================================================================="
 echo ""
+echo "🎉 Virtual environment will auto-activate on next login!"
+echo "   To activate now: source ~/.bashrc"
+echo ""
 echo "📦 To test demo scripts:"
-echo "   source .venv/bin/activate && python fun/hello_world.py"
+echo "   python fun/hello_world.py"
 echo ""
 echo "🛒 To run the shopping system manually:"
-echo "   source .venv/bin/activate && python barcode_inventree.py"
+echo "   python barcode_inventree.py"
 echo ""
 echo "🔧 Service management commands:"
 echo "   Start:   sudo systemctl start inventree-scanner.service"
@@ -123,4 +149,7 @@ echo "⚙️  Disable auto-start:"
 echo "   sudo systemctl disable inventree-scanner.service"
 echo ""
 echo "==================================================================="
+echo ""
+echo "⚠️  IMPORTANT: Reload your shell to activate venv:"
+echo "   source ~/.bashrc"
 echo ""
