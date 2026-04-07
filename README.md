@@ -17,17 +17,18 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
     sudo reboot
     ```
 
-4.  **Run the Hello World example**:
-    ```bash
-    source .venv/bin/activate
-    python hello_world.py
-    ```
-
-5.  **Run the InvenTree Barcode Scanner (New!)**:
+4.  **Run the InvenTree Shopping System**:
     ```bash
     source .venv/bin/activate
     python barcode_inventree.py
     ```
+
+5.  **Try the demo scripts** (optional):
+    ```bash
+    source .venv/bin/activate
+    python fun/hello_world.py
+    ```
+    See `fun/README.md` for more demo scripts!
 
 ## InvenTree Shopping System
 
