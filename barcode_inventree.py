@@ -5,9 +5,11 @@ import glob
 import textwrap
 import requests
 import json
+import qrcode
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
+from collections import defaultdict
 
 # Try to import evdev for direct hardware access
 try:
@@ -21,6 +23,12 @@ except ImportError:
 load_dotenv()
 INVENTREE_URL = os.getenv("INVENTREE_URL", "https://10.72.3.68:8443")
 INVENTREE_TOKEN = os.getenv("INVENTREE_TOKEN")
+HTL_NAME = os.getenv("VITE_PAYMENT_NAME") or os.getenv("HTL_NAME", "HTL Makerspace")
+HTL_CODE = os.getenv("HTL_CODE", "HTL001")
+HTL_IBAN = os.getenv("VITE_PAYMENT_IBAN") or os.getenv("HTL_IBAN", "")
+
+# Special barcode for checkout confirmation
+CONFIRM_BARCODE = "CONFIRM"
 
 # AZERTY Scan Code Map (for evdev)
 SCAN_CODES = {
@@ -158,17 +166,36 @@ def get_item_by_barcode(barcode):
     return None
 
 def extract_price(part_detail):
-    if not part_detail: return "-"
+    if not part_detail: return 0.0
     # pricing_min is usually the most reliable field
     if part_detail.get('pricing_min'):
-        try: return f"EUR {float(part_detail['pricing_min']):.2f}"
+        try: return float(part_detail['pricing_min'])
         except: pass
-    if part_detail.get('pricing_min_string'):
-        return part_detail['pricing_min_string']
     if part_detail.get('sell_price'):
-        try: return f"EUR {float(part_detail['sell_price']):.2f}"
+        try: return float(part_detail['sell_price'])
         except: pass
-    return "-"
+    return 0.0
+
+def format_price(price):
+    """Format price as string with EUR symbol"""
+    if price == 0.0: return "-"
+    return f"€{price:.2f}"
+
+def extract_category(part_detail):
+    """Extract category name from part detail"""
+    if not part_detail: return "uncategorized"
+    
+    # Try to get category_detail first (more detailed)
+    cat_detail = part_detail.get('category_detail')
+    if cat_detail and isinstance(cat_detail, dict):
+        return cat_detail.get('name', 'uncategorized').lower()
+    
+    # Fall back to category field (might just be an ID)
+    category = part_detail.get('category')
+    if category and isinstance(category, str):
+        return category.lower()
+    
+    return "uncategorized"
 
 def get_image(part_detail):
     img_path = part_detail.get('thumbnail') or part_detail.get('image')
@@ -180,45 +207,257 @@ def get_image(part_detail):
         return Image.open(BytesIO(response.content))
     except: return None
 
-# --- 3. Display Logic ---
+# --- 3. Shopping Cart Management ---
 
-def show_item_on_lcd(disp, part_detail):
+class ShoppingCart:
+    def __init__(self):
+        self.items = []  # List of (part_detail, quantity)
+        self.confirm_state = 0  # 0: normal, 1: awaiting final confirm, 2: show QR
+    
+    def add_item(self, part_detail):
+        """Add item to cart or increment quantity if already exists"""
+        for i, (item, qty) in enumerate(self.items):
+            if item.get('pk') == part_detail.get('pk'):
+                self.items[i] = (item, qty + 1)
+                return
+        self.items.append((part_detail, 1))
+    
+    def get_total(self):
+        """Calculate total price of all items in cart"""
+        total = 0.0
+        for part_detail, qty in self.items:
+            total += extract_price(part_detail) * qty
+        return total
+    
+    def get_categories(self):
+        """Get unique categories from cart items"""
+        categories = set()
+        for part_detail, _ in self.items:
+            categories.add(extract_category(part_detail))
+        return sorted(categories)
+    
+    def get_description(self):
+        """Generate description for payment (category list)"""
+        categories = self.get_categories()
+        if not categories:
+            return f"{HTL_NAME} - Purchase"
+        return f"{HTL_NAME} - " + " - ".join(categories)
+    
+    def clear(self):
+        """Clear the cart"""
+        self.items = []
+        self.confirm_state = 0
+    
+    def is_empty(self):
+        return len(self.items) == 0
+
+# --- 4. Display Logic ---
+
+def show_item_on_lcd(disp, part_detail, cart):
+    """Display current scanned item with shopping cart on the side"""
     L_WIDTH, L_HEIGHT = 320, 240
     image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
     draw = ImageDraw.Draw(image)
     
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
-    body_f = ImageFont.truetype(font_path, 16) if os.path.exists(font_path) else ImageFont.load_default()
-    price_f = ImageFont.truetype(font_path, 26) if os.path.exists(font_path) else ImageFont.load_default()
+    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
+    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
+    price_f = ImageFont.truetype(font_path, 22) if os.path.exists(font_path) else ImageFont.load_default()
 
+    # Split view: Left side (200px) for item, Right side (120px) for cart
+    ITEM_WIDTH = 200
+    CART_X = ITEM_WIDTH
+    
     if part_detail:
         name = part_detail.get('name', 'Unknown Item')
         price = extract_price(part_detail)
         
-        draw.rectangle([0, 0, L_WIDTH, 45], fill=(30, 50, 90))
-        draw.text((12, 10), "ITEM IDENTIFIED", font=header_f, fill=(255, 255, 255))
+        # Header
+        draw.rectangle([0, 0, ITEM_WIDTH, 35], fill=(30, 50, 90))
+        draw.text((8, 8), "ITEM SCANNED", font=header_f, fill=(255, 255, 255))
         
-        draw.text((120, 60), textwrap.fill(name, width=22), font=header_f, fill=(255, 215, 0))
-        draw.text((120, 150), "UNIT PRICE:", font=body_f, fill=(200, 200, 200))
-        draw.text((120, 175), price, font=price_f, fill=(50, 255, 50))
+        # Item name (wrapped)
+        wrapped_name = textwrap.fill(name, width=18)
+        draw.text((105, 45), wrapped_name, font=body_f, fill=(255, 215, 0))
         
+        # Price
+        draw.text((105, 140), "PRICE:", font=small_f, fill=(200, 200, 200))
+        draw.text((105, 160), format_price(price), font=price_f, fill=(50, 255, 50))
+        
+        # Image
         img = get_image(part_detail)
         if img:
-            img.thumbnail((100, 100))
-            image.paste(img, (10, 60))
+            img.thumbnail((90, 90))
+            image.paste(img, (8, 45))
         else:
-            draw.rectangle([10, 60, 110, 160], outline=(80, 80, 80))
-            draw.text((25, 100), "NO IMAGE", font=body_f, fill=(80, 80, 80))
+            draw.rectangle([8, 45, 98, 135], outline=(80, 80, 80))
+            draw.text((20, 80), "NO\nIMAGE", font=small_f, fill=(80, 80, 80))
     else:
-        draw.text((60, 110), "BARCODE NOT RECOGNIZED", font=header_f, fill=(255, 80, 80))
+        draw.text((10, 100), "BARCODE NOT\nRECOGNIZED", font=header_f, fill=(255, 80, 80))
+    
+    # Shopping Cart on the right
+    draw.rectangle([CART_X, 0, L_WIDTH, L_HEIGHT], fill=(20, 20, 30))
+    draw.rectangle([CART_X, 0, L_WIDTH, 30], fill=(50, 30, 90))
+    draw.text((CART_X + 10, 7), "CART", font=body_f, fill=(255, 255, 255))
+    
+    y_offset = 35
+    if cart.is_empty():
+        draw.text((CART_X + 15, 100), "Empty", font=small_f, fill=(100, 100, 100))
+    else:
+        for part, qty in cart.items[:4]:  # Show max 4 items
+            item_name = part.get('name', 'Item')
+            if len(item_name) > 10:
+                item_name = item_name[:10] + "."
+            draw.text((CART_X + 5, y_offset), f"{qty}x", font=small_f, fill=(200, 200, 200))
+            draw.text((CART_X + 5, y_offset + 15), item_name, font=small_f, fill=(150, 150, 150))
+            y_offset += 40
+        
+        if len(cart.items) > 4:
+            draw.text((CART_X + 5, y_offset), f"+{len(cart.items)-4} more", font=small_f, fill=(100, 100, 100))
+        
+        # Total at bottom
+        draw.rectangle([CART_X, L_HEIGHT - 45, L_WIDTH, L_HEIGHT], fill=(30, 60, 30))
+        draw.text((CART_X + 5, L_HEIGHT - 40), "TOTAL", font=small_f, fill=(200, 200, 200))
+        draw.text((CART_X + 5, L_HEIGHT - 22), format_price(cart.get_total()), font=body_f, fill=(50, 255, 50))
 
     if HAS_LCD:
         disp.ShowImage(image.rotate(90, expand=True))
     else:
-        print(f"\n[DISPLAY] {part_detail.get('name') if part_detail else 'N/A'} - {extract_price(part_detail)}")
+        print(f"\n[DISPLAY] {part_detail.get('name') if part_detail else 'N/A'} - {format_price(extract_price(part_detail))}")
+        print(f"[CART] {len(cart.items)} items - Total: {format_price(cart.get_total())}")
 
-# --- 4. Main ---
+def show_confirmation_screen(disp, cart):
+    """Show checkout confirmation with all items"""
+    L_WIDTH, L_HEIGHT = 320, 240
+    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
+    draw = ImageDraw.Draw(image)
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
+    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
+    
+    # Header
+    draw.rectangle([0, 0, L_WIDTH, 35], fill=(90, 50, 30))
+    draw.text((60, 8), "CHECKOUT", font=header_f, fill=(255, 255, 255))
+    
+    y_offset = 45
+    
+    # List items
+    for part, qty in cart.items[:5]:  # Show max 5 items
+        name = part.get('name', 'Item')
+        if len(name) > 20:
+            name = name[:20] + "..."
+        price = extract_price(part)
+        item_total = price * qty
+        
+        draw.text((10, y_offset), f"{qty}x {name}", font=small_f, fill=(200, 200, 200))
+        draw.text((230, y_offset), format_price(item_total), font=small_f, fill=(200, 200, 200))
+        y_offset += 25
+    
+    if len(cart.items) > 5:
+        draw.text((10, y_offset), f"+ {len(cart.items) - 5} more items...", font=small_f, fill=(150, 150, 150))
+        y_offset += 25
+    
+    # Total
+    draw.rectangle([0, L_HEIGHT - 60, L_WIDTH, L_HEIGHT - 25], fill=(30, 60, 30))
+    draw.text((10, L_HEIGHT - 55), "TOTAL:", font=header_f, fill=(255, 255, 255))
+    draw.text((180, L_HEIGHT - 55), format_price(cart.get_total()), font=header_f, fill=(50, 255, 50))
+    
+    # Instruction
+    draw.text((30, L_HEIGHT - 18), "Scan CONFIRM to proceed", font=small_f, fill=(255, 215, 0))
+    
+    if HAS_LCD:
+        disp.ShowImage(image.rotate(90, expand=True))
+    else:
+        print("\n" + "="*40)
+        print("CHECKOUT CONFIRMATION")
+        print("="*40)
+        for part, qty in cart.items:
+            name = part.get('name', 'Item')
+            price = extract_price(part)
+            print(f"{qty}x {name} - {format_price(price * qty)}")
+        print("-"*40)
+        print(f"TOTAL: {format_price(cart.get_total())}")
+        print("="*40)
+        print("Scan CONFIRM again to proceed")
+
+def generate_wero_qr(amount, description):
+    """Generate Wero payment QR code
+    
+    Wero uses EPC QR codes (European Payments Council standard)
+    Format: https://www.europeanpaymentscouncil.eu/document-library/guidance-documents/quick-response-code-guidelines-enable-data-capture-initiation
+    """
+    # EPC QR Code format for SEPA Credit Transfer
+    # This is a standard format that most European banking apps support
+    epc_data = [
+        "BCD",  # Service tag
+        "002",  # Version
+        "1",    # Character set (1 = UTF-8)
+        "SCT",  # Identification (SEPA Credit Transfer)
+        "",     # BIC (optional, can be empty)
+        HTL_NAME,  # Beneficiary name
+        HTL_IBAN,  # Beneficiary account (IBAN)
+        f"EUR{amount:.2f}",  # Amount
+        "",     # Purpose (optional)
+        "",     # Structured reference (optional)
+        description  # Unstructured remittance information
+    ]
+    
+    qr_content = "\n".join(epc_data)
+    
+    # Generate QR code
+    qr = qrcode.QRCode(version=1, box_size=4, border=2)
+    qr.add_data(qr_content)
+    qr.make(fit=True)
+    
+    return qr.make_image(fill_color="black", back_color="white")
+
+def show_payment_qr(disp, cart):
+    """Display Wero payment QR code"""
+    L_WIDTH, L_HEIGHT = 320, 240
+    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
+    draw = ImageDraw.Draw(image)
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
+    
+    # Header
+    draw.rectangle([0, 0, L_WIDTH, 35], fill=(30, 90, 50))
+    draw.text((80, 8), "SCAN TO PAY", font=header_f, fill=(255, 255, 255))
+    
+    # Generate and display QR code
+    total = cart.get_total()
+    description = cart.get_description()
+    qr_img = generate_wero_qr(total, description)
+    
+    # Resize QR to fit
+    qr_img = qr_img.resize((160, 160))
+    image.paste(qr_img, (80, 45))
+    
+    # Amount and description
+    draw.text((100, 210), format_price(total), font=header_f, fill=(50, 255, 50))
+    
+    # Categories
+    cats = " - ".join(cart.get_categories())
+    if len(cats) > 30:
+        cats = cats[:30] + "..."
+    draw.text((10, 230), cats, font=small_f, fill=(200, 200, 200))
+    
+    if HAS_LCD:
+        disp.ShowImage(image.rotate(90, expand=True))
+    else:
+        print("\n" + "="*40)
+        print("PAYMENT QR CODE")
+        print("="*40)
+        print(f"Amount: {format_price(total)}")
+        print(f"Description: {description}")
+        print("Scan QR code with your banking app")
+        print("="*40)
+
+# --- 5. Main ---
 
 def find_scanner():
     if not HAS_EVDEV: return None
@@ -259,11 +498,15 @@ def main():
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     scanner = find_scanner()
-    print("\n--- InvenTree Scanner ---")
+    print("\n--- InvenTree Shopping System ---")
+    print(f"Makerspace: {HTL_NAME}")
     if scanner: print(f"Hardware: {scanner.name}")
     else: print("Mode: Terminal Input")
+    print(f"Scan items to add to cart. Scan '{CONFIRM_BARCODE}' to checkout.\n")
 
+    cart = ShoppingCart()
     last_scan_time = 0
+    
     try:
         while True:
             if scanner:
@@ -272,13 +515,65 @@ def main():
                 raw = input("Scan: ").strip()
                 barcode = decode_manual_input(raw) if raw else ""
             
-            # Debounce: Ignore identical scans within 1 second
+            # Debounce: Ignore identical scans within 0.5 seconds
             current_time = time.time()
-            if barcode:
-                print(f"Querying: {barcode}")
-                part = get_item_by_barcode(barcode)
-                show_item_on_lcd(disp, part)
-                last_scan_time = current_time
+            if not barcode or (current_time - last_scan_time) < 0.5:
+                continue
+            
+            last_scan_time = current_time
+            print(f"Scanned: {barcode}")
+            
+            # Handle CONFIRM barcode
+            if barcode == CONFIRM_BARCODE:
+                if cart.confirm_state == 0:
+                    # First confirm - show checkout screen
+                    if cart.is_empty():
+                        print("Cart is empty! Add items first.")
+                        continue
+                    
+                    cart.confirm_state = 1
+                    show_confirmation_screen(disp, cart)
+                    print("First CONFIRM received. Scan CONFIRM again to generate payment QR.")
+                
+                elif cart.confirm_state == 1:
+                    # Second confirm - show payment QR
+                    cart.confirm_state = 2
+                    show_payment_qr(disp, cart)
+                    print("Payment QR displayed. Scan CONFIRM again to clear cart.")
+                
+                elif cart.confirm_state == 2:
+                    # Third confirm - clear cart and start over
+                    print(f"Transaction complete! Cleared {len(cart.items)} items.")
+                    cart.clear()
+                    
+                    # Show empty screen
+                    L_WIDTH, L_HEIGHT = 320, 240
+                    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
+                    draw = ImageDraw.Draw(image)
+                    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+                    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+                    draw.text((60, 100), "Ready for next customer", font=header_f, fill=(100, 200, 100))
+                    if HAS_LCD:
+                        disp.ShowImage(image.rotate(90, expand=True))
+                    
+                    time.sleep(2)  # Show message for 2 seconds
+                
+                continue
+            
+            # Normal item scan
+            if cart.confirm_state != 0:
+                # Reset confirmation if user scans item during checkout
+                cart.confirm_state = 0
+                print("Checkout cancelled. Returning to shopping.")
+            
+            part = get_item_by_barcode(barcode)
+            if part:
+                cart.add_item(part)
+                print(f"Added: {part.get('name')} - {format_price(extract_price(part))}")
+                print(f"Cart total: {format_price(cart.get_total())}")
+            
+            show_item_on_lcd(disp, part, cart)
+            
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:

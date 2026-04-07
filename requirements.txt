@@ -6,3 +6,4 @@ lgpio
 requests
 python-dotenv
 evdev
+qrcode[pil]

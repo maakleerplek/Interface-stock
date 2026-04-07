@@ -29,25 +29,66 @@ This repository contains scripts to set up and run a Waveshare 2.4inch LCD modul
     python barcode_inventree.py
     ```
 
-## InvenTree Integration
+## InvenTree Shopping System
 
-The `barcode_inventree.py` script allows you to scan barcodes and fetch item details (name, price, and image) directly from your InvenTree instance.
+The `barcode_inventree.py` script is a complete shopping cart system with InvenTree integration and Wero payment support.
 
-1.  **Configure `.env`**:
-    The setup automatically creates a `.env` file in the `Interface-stock` directory. Ensure the following variables are set correctly:
-    ```env
-    INVENTREE_URL=https://10.72.3.141:8443
-    INVENTREE_TOKEN=your-api-token
-    ```
+### Features
 
-2.  **Run the scanner**:
-    ```bash
-    source .venv/bin/activate
-    python barcode_inventree.py
-    ```
-    Scan any barcode assigned to a Part or StockItem in InvenTree. The display will show the item's thumbnail, name, and current price.
+1. **Item Scanning**: Scan barcodes/QR codes to add items to cart
+2. **Live Shopping Cart**: See items and running total on the right side of the display
+3. **Checkout Flow**: Three-step confirmation process
+4. **Wero Payment**: Generate payment QR codes with automatic category detection
+5. **Multi-Customer Support**: Automatic cart clearing after payment
 
-## Troubleshooting
+### Setup
+
+1. **Configure `.env`**:
+   ```env
+   INVENTREE_URL=https://10.72.3.68:8443
+   INVENTREE_TOKEN=your-api-token
+   HTL_NAME=Your Makerspace Name
+   HTL_CODE=Your Makerspace Code
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+3. **Create a CONFIRM barcode**:
+   Generate a barcode with the text "CONFIRM" for checkout
+
+### Workflow
+
+1. **Scan items**: Scan product barcodes to add them to the cart
+   - Items appear on the left with image and price
+   - Shopping cart updates on the right side
+   - Items automatically increment if scanned multiple times
+
+2. **First CONFIRM scan**: Shows checkout confirmation screen
+   - Displays all items in cart
+   - Shows total price
+   - Lists each item with quantity and price
+
+3. **Second CONFIRM scan**: Displays Wero payment QR code
+   - QR code contains total amount
+   - Description includes HTL name and product categories
+   - Customer scans with their banking app
+
+4. **Third CONFIRM scan**: Clears cart
+   - Transaction complete
+   - Ready for next customer
+   - Cart resets to empty
+
+### Category-Based Descriptions
+
+The system automatically extracts categories from InvenTree and generates a description for the payment:
+- Example: "HTL Makerspace - drink - wood - electronics"
+- This helps identify what was purchased in bank statements
+
+### Troubleshooting
 
 ### Missing `libopenblas.so.0`
 If you see an error about `libopenblas.so.0`, ensure you have run `./install.sh`, which now includes:
