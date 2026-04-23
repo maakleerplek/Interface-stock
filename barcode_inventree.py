@@ -27,10 +27,12 @@ HTL_NAME = os.getenv("VITE_PAYMENT_NAME") or os.getenv("HTL_NAME", "HTL Makerspa
 HTL_CODE = os.getenv("HTL_CODE", "HTL001")
 HTL_IBAN = os.getenv("VITE_PAYMENT_IBAN") or os.getenv("HTL_IBAN", "")
 
-# Special barcode for checkout confirmation
+# Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
+CANCEL_BARCODE = "CANCEL"
 
 # AZERTY Scan Code Map (for evdev)
+# ... (rest of SCAN_CODES and AZERTY_MAP)
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     ecodes.KEY_ENTER: '\n',
@@ -46,6 +48,7 @@ def decode_manual_input(scanned_text):
     return "".join(AZERTY_MAP.get(c, c) for c in scanned_text)
 
 # --- 1. LCD Configuration ---
+# ... (rest of find_lib_path and LCD setup)
 def find_lib_path():
     for root_dir in ['.', 'lcd_assets', 'LCD_Module_code']:
         if not os.path.exists(root_dir): continue
@@ -73,7 +76,54 @@ if lib_path and os.path.exists(lib_path):
     except ImportError:
         pass
 
-# --- 2. InvenTree API Functions ---
+# --- 2. Barcode Cache ---
+
+class BarcodeCache:
+    def __init__(self, cache_file="barcode_cache.json"):
+        self.cache_file = cache_file
+        self.cache = {}
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, "r") as f:
+                    self.cache = json.load(f)
+                print(f"DEBUG: Loaded {len(self.cache)} items from cache.")
+            except Exception as e:
+                print(f"DEBUG: Error loading cache: {e}")
+                self.cache = {}
+
+    def save(self):
+        try:
+            with open(self.cache_file, "w") as f:
+                json.dump(self.cache, f)
+        except Exception as e:
+            print(f"DEBUG: Error saving cache: {e}")
+
+    def get(self, barcode):
+        return self.cache.get(barcode)
+
+    def set(self, barcode, part_detail):
+        if part_detail:
+            # Cache essential details for display and payment
+            essential = {
+                "pk": part_detail.get("pk"),
+                "name": part_detail.get("name"),
+                "pricing_min": part_detail.get("pricing_min"),
+                "sell_price": part_detail.get("sell_price"),
+                "thumbnail": part_detail.get("thumbnail"),
+                "image": part_detail.get("image"),
+                "category_detail": part_detail.get("category_detail"),
+                "category": part_detail.get("category"),
+            }
+            self.cache[barcode] = essential
+            self.save()
+
+# Initialize global cache
+BARCODE_CACHE = BarcodeCache()
+
+# --- 3. InvenTree API Functions ---
 
 def fetch_part_details(part_id):
     """Fetch full part details by ID."""
@@ -90,6 +140,12 @@ def fetch_part_details(part_id):
     return None
 
 def get_item_by_barcode(barcode):
+    # 1. Check Cache First
+    cached_part = BARCODE_CACHE.get(barcode)
+    if cached_part:
+        print(f"DEBUG: Cache HIT for '{barcode}'")
+        return cached_part
+
     if not INVENTREE_TOKEN:
         print("Error: INVENTREE_TOKEN not configured")
         return None
@@ -97,7 +153,7 @@ def get_item_by_barcode(barcode):
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
     
     # --- Attempt 1: Barcode API (Direct Match) ---
-    print(f"DEBUG: Checking Barcode API for '{barcode}'...")
+    print(f"DEBUG: Cache MISS. Checking Barcode API for '{barcode}'...")
     url = f"{INVENTREE_URL}/api/barcode/"
     try:
         response = requests.post(url, data={"barcode": barcode}, headers=headers, timeout=5, verify=False)
@@ -114,19 +170,23 @@ def get_item_by_barcode(barcode):
                 # Then check direct fields
                 return obj.get("part_detail") or fetch_part_details(obj.get("part"))
 
+            part = None
             if "stockitem" in res:
                 print("DEBUG: Processing StockItem match")
                 part = extract_from_obj(res["stockitem"])
-                if part: return part
             
-            if "part" in res:
+            elif "part" in res:
                 print("DEBUG: Processing Part match")
-                # For a direct part match, the 'part' object might be the part itself or have an 'instance'
                 p_obj = res["part"]
                 if isinstance(p_obj, dict):
-                    if "instance" in p_obj: return p_obj["instance"]
-                    if "name" in p_obj: return p_obj
-                return fetch_part_details(p_obj)
+                    if "instance" in p_obj: part = p_obj["instance"]
+                    elif "name" in p_obj: part = p_obj
+                if not part:
+                    part = fetch_part_details(p_obj)
+            
+            if part:
+                BARCODE_CACHE.set(barcode, part)
+                return part
                     
     except Exception as e:
         print(f"DEBUG: Barcode API Error: {e}")
@@ -144,6 +204,7 @@ def get_item_by_barcode(barcode):
                 # Extra safety check for exact match
                 if item.get("barcode") == barcode or item.get("IPN") == barcode:
                     print(f"DEBUG: Found exact match: {item.get('name')}")
+                    BARCODE_CACHE.set(barcode, item)
                     return item
     except Exception as e:
         print(f"DEBUG: Part Field Search Error: {e}")
@@ -159,7 +220,10 @@ def get_item_by_barcode(barcode):
             for item in results:
                 if item.get("barcode") == barcode:
                     print(f"DEBUG: Found StockItem match, fetching part details")
-                    return item.get("part_detail") or fetch_part_details(item.get("part"))
+                    part = item.get("part_detail") or fetch_part_details(item.get("part"))
+                    if part:
+                        BARCODE_CACHE.set(barcode, part)
+                        return part
     except Exception as e:
         print(f"DEBUG: StockItem Field Search Error: {e}")
 
@@ -213,6 +277,7 @@ class ShoppingCart:
     def __init__(self):
         self.items = []  # List of (part_detail, quantity)
         self.confirm_state = 0  # 0: normal, 1: awaiting final confirm, 2: show QR
+        self.cancel_state = 0   # 0: normal, 1: awaiting final cancel
     
     def add_item(self, part_detail):
         """Add item to cart or increment quantity if already exists"""
@@ -244,14 +309,67 @@ class ShoppingCart:
         return f"{HTL_NAME} - " + " - ".join(categories)
     
     def clear(self):
-        """Clear the cart"""
+        """Clear the cart and reset states"""
         self.items = []
         self.confirm_state = 0
+        self.cancel_state = 0
     
     def is_empty(self):
         return len(self.items) == 0
 
 # --- 4. Display Logic ---
+
+def show_message_screen(disp, title, message, color=(30, 50, 90)):
+    """Display a full-screen message"""
+    L_WIDTH, L_HEIGHT = 320, 240
+    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
+    draw = ImageDraw.Draw(image)
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
+    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
+
+    # Header / Background
+    draw.rectangle([0, 0, L_WIDTH, L_HEIGHT], fill=(15, 15, 25))
+    draw.rectangle([0, 40, L_WIDTH, 90], fill=color)
+    
+    # Center title
+    w = draw.textlength(title, font=header_f)
+    draw.text(((L_WIDTH - w) / 2, 52), title, font=header_f, fill=(255, 255, 255))
+    
+    # Center message
+    wrapped_msg = textwrap.fill(message, width=30)
+    y = 120
+    for line in wrapped_msg.split('\n'):
+        w = draw.textlength(line, font=body_f)
+        draw.text(((L_WIDTH - w) / 2, y), line, font=body_f, fill=(200, 200, 200))
+        y += 25
+
+    if HAS_LCD:
+        disp.ShowImage(image.rotate(90, expand=True))
+    else:
+        print(f"\n[{title}] {message}")
+
+def show_warning_screen(disp, title, message):
+    show_message_screen(disp, title, message, color=(150, 50, 30))
+
+def show_idle_screen(disp):
+    """Display waiting screen"""
+    L_WIDTH, L_HEIGHT = 320, 240
+    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
+    draw = ImageDraw.Draw(image)
+    
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
+    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
+    
+    draw.text((60, 100), "Ready to Scan", font=header_f, fill=(100, 200, 100))
+    draw.text((65, 130), f"Makerspace: {HTL_NAME}", font=small_f, fill=(150, 150, 150))
+    
+    if HAS_LCD:
+        disp.ShowImage(image.rotate(90, expand=True))
+    else:
+        print("\n[IDLE] Ready to Scan")
 
 def show_item_on_lcd(disp, part_detail, cart):
     """Display current scanned item with shopping cart on the side"""
@@ -366,7 +484,7 @@ def show_confirmation_screen(disp, cart):
     draw.text((180, L_HEIGHT - 55), format_price(cart.get_total()), font=header_f, fill=(50, 255, 50))
     
     # Instruction
-    draw.text((30, L_HEIGHT - 18), "Scan CONFIRM to proceed", font=small_f, fill=(255, 215, 0))
+    draw.text((30, L_HEIGHT - 18), "Scan CONFIRM again to pay", font=small_f, fill=(255, 215, 0))
     
     if HAS_LCD:
         disp.ShowImage(image.rotate(90, expand=True))
@@ -426,7 +544,7 @@ def show_payment_qr(disp, cart):
     
     # Header
     draw.rectangle([0, 0, L_WIDTH, 35], fill=(30, 90, 50))
-    draw.text((80, 8), "SCAN TO PAY", font=header_f, fill=(255, 255, 255))
+    draw.text((70, 8), "WERO PAYMENT", font=header_f, fill=(255, 255, 255))
     
     # Generate and display QR code
     total = cart.get_total()
@@ -450,7 +568,7 @@ def show_payment_qr(disp, cart):
         disp.ShowImage(image.rotate(90, expand=True))
     else:
         print("\n" + "="*40)
-        print("PAYMENT QR CODE")
+        print("WERO PAYMENT QR CODE")
         print("="*40)
         print(f"Amount: {format_price(total)}")
         print(f"Description: {description}")
@@ -502,10 +620,13 @@ def main():
     print(f"Makerspace: {HTL_NAME}")
     if scanner: print(f"Hardware: {scanner.name}")
     else: print("Mode: Terminal Input")
-    print(f"Scan items to add to cart. Scan '{CONFIRM_BARCODE}' to checkout.\n")
+    print(f"Scan items to add to cart. Scan '{CONFIRM_BARCODE}' to checkout or '{CANCEL_BARCODE}' to cancel.\n")
 
     cart = ShoppingCart()
     last_scan_time = 0
+    
+    # Show initial screen
+    show_idle_screen(disp)
     
     try:
         while True:
@@ -523,14 +644,34 @@ def main():
             last_scan_time = current_time
             print(f"Scanned: {barcode}")
             
+            # Handle CANCEL barcode
+            if barcode == CANCEL_BARCODE:
+                cart.confirm_state = 0 # Reset confirm state if cancelling
+                if cart.is_empty():
+                    print("Cart is already empty.")
+                    continue
+                    
+                if cart.cancel_state == 0:
+                    cart.cancel_state = 1
+                    show_warning_screen(disp, "CANCEL?", "Scan CANCEL again to stop transaction and clear cart")
+                    print("First CANCEL received. Scan CANCEL again to stop.")
+                else:
+                    print("Transaction stopped. Clearing cart.")
+                    cart.clear()
+                    show_message_screen(disp, "CANCELLED", "Transaction stopped. Cart cleared.", color=(150, 50, 30))
+                    time.sleep(2)
+                    show_idle_screen(disp)
+                continue
+
             # Handle CONFIRM barcode
             if barcode == CONFIRM_BARCODE:
+                cart.cancel_state = 0 # Reset cancel state if confirming
+                if cart.is_empty():
+                    print("Cart is empty! Add items first.")
+                    continue
+                
                 if cart.confirm_state == 0:
                     # First confirm - show checkout screen
-                    if cart.is_empty():
-                        print("Cart is empty! Add items first.")
-                        continue
-                    
                     cart.confirm_state = 1
                     show_confirmation_screen(disp, cart)
                     print("First CONFIRM received. Scan CONFIRM again to generate payment QR.")
@@ -539,40 +680,31 @@ def main():
                     # Second confirm - show payment QR
                     cart.confirm_state = 2
                     show_payment_qr(disp, cart)
-                    print("Payment QR displayed. Scan CONFIRM again to clear cart.")
+                    print("Payment QR displayed. Scan CONFIRM/CANCEL/ITEM to start new session.")
                 
                 elif cart.confirm_state == 2:
-                    # Third confirm - clear cart and start over
+                    # Third confirm (or any scan after QR) - clear cart and start over
                     print(f"Transaction complete! Cleared {len(cart.items)} items.")
                     cart.clear()
-                    
-                    # Show empty screen
-                    L_WIDTH, L_HEIGHT = 320, 240
-                    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-                    draw = ImageDraw.Draw(image)
-                    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-                    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-                    draw.text((60, 100), "Ready for next customer", font=header_f, fill=(100, 200, 100))
-                    if HAS_LCD:
-                        disp.ShowImage(image.rotate(90, expand=True))
-                    
-                    time.sleep(2)  # Show message for 2 seconds
+                    show_idle_screen(disp)
                 
                 continue
             
             # Normal item scan
-            if cart.confirm_state != 0:
-                # Reset confirmation if user scans item during checkout
+            if cart.confirm_state != 0 or cart.cancel_state != 0:
+                # Reset confirmation/cancellation if user scans item
                 cart.confirm_state = 0
-                print("Checkout cancelled. Returning to shopping.")
+                cart.cancel_state = 0
+                print("Action interrupted. Returning to shopping.")
             
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
                 print(f"Added: {part.get('name')} - {format_price(extract_price(part))}")
                 print(f"Cart total: {format_price(cart.get_total())}")
-            
-            show_item_on_lcd(disp, part, cart)
+                show_item_on_lcd(disp, part, cart)
+            else:
+                show_item_on_lcd(disp, None, cart)
             
     except KeyboardInterrupt:
         print("\nExiting...")
