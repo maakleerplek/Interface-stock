@@ -47,6 +47,51 @@ AZERTY_MAP = {
 def decode_manual_input(scanned_text):
     return "".join(AZERTY_MAP.get(c, c) for c in scanned_text)
 
+# --- BRUTALISM DESIGN SYSTEM ---
+# Colors
+COL_BG      = (10, 10, 10)       # Near-black background
+COL_FG      = (240, 240, 240)    # Primary text
+COL_ACCENT  = (255, 60, 20)      # Vermillion red — action, prices
+COL_ACCENT2 = (255, 220, 0)      # Yellow — warnings, totals
+COL_MUTED   = (100, 100, 100)    # Secondary text
+COL_BLOCK   = (30, 30, 30)       # Panel backgrounds
+COL_SUCCESS = (0, 200, 80)       # Confirmation, QR
+COL_BORDER  = (240, 240, 240)    # Thick white borders
+COL_DANGER  = (180, 30, 20)      # Cancel / error
+
+# Screen dimensions
+L_WIDTH, L_HEIGHT = 320, 240
+BORDER_W = 3  # Brutalist thick border width
+
+# Fonts — loaded ONCE at startup (major speed win)
+_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+_HAS_FONT = os.path.exists(_FONT_PATH)
+FONT_XL = ImageFont.truetype(_FONT_PATH, 26) if _HAS_FONT else ImageFont.load_default()
+FONT_LG = ImageFont.truetype(_FONT_PATH, 18) if _HAS_FONT else ImageFont.load_default()
+FONT_MD = ImageFont.truetype(_FONT_PATH, 14) if _HAS_FONT else ImageFont.load_default()
+FONT_SM = ImageFont.truetype(_FONT_PATH, 11) if _HAS_FONT else ImageFont.load_default()
+
+def _new_frame(bg=None):
+    """Create a fresh canvas + draw context."""
+    img = Image.new('RGB', (L_WIDTH, L_HEIGHT), bg or COL_BG)
+    return img, ImageDraw.Draw(img)
+
+def _show(disp, image):
+    """Push image to LCD (handles rotation)."""
+    if HAS_LCD:
+        disp.ShowImage(image.rotate(90, expand=True))
+
+def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
+    """Draw a rectangle with a thick brutalist border."""
+    if fill:
+        draw.rectangle(box, fill=fill)
+    draw.rectangle(box, outline=border_color or COL_BORDER, width=width)
+
+def _center_text(draw, y, text, font, fill=COL_FG, area_width=L_WIDTH):
+    """Draw horizontally centered text."""
+    w = draw.textlength(text, font=font)
+    draw.text(((area_width - w) / 2, y), text, font=font, fill=fill)
+
 # --- 1. LCD Configuration ---
 # ... (rest of find_lib_path and LCD setup)
 def find_lib_path():
@@ -317,178 +362,183 @@ class ShoppingCart:
     def is_empty(self):
         return len(self.items) == 0
 
-# --- 4. Display Logic ---
+# --- 4. Display Logic (Brutalist) ---
 
-def show_message_screen(disp, title, message, color=(30, 50, 90)):
-    """Display a full-screen message"""
-    L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-    draw = ImageDraw.Draw(image)
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 20) if os.path.exists(font_path) else ImageFont.load_default()
-    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
+def show_message_screen(disp, title, message, color=None):
+    """Full-screen message — brutalist block style."""
+    image, draw = _new_frame()
+    accent = color or COL_ACCENT
 
-    # Header / Background
-    draw.rectangle([0, 0, L_WIDTH, L_HEIGHT], fill=(15, 15, 25))
-    draw.rectangle([0, 40, L_WIDTH, 90], fill=color)
-    
-    # Center title
-    w = draw.textlength(title, font=header_f)
-    draw.text(((L_WIDTH - w) / 2, 52), title, font=header_f, fill=(255, 255, 255))
-    
-    # Center message
-    wrapped_msg = textwrap.fill(message, width=30)
-    y = 120
-    for line in wrapped_msg.split('\n'):
-        w = draw.textlength(line, font=body_f)
-        draw.text(((L_WIDTH - w) / 2, y), line, font=body_f, fill=(200, 200, 200))
-        y += 25
+    # Outer border
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
 
-    if HAS_LCD:
-        disp.ShowImage(image.rotate(90, expand=True))
-    else:
+    # Title block — solid accent band
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 50], fill=accent)
+    _center_text(draw, 14, title.upper(), FONT_LG, fill=COL_FG)
+
+    # Horizontal rule
+    draw.rectangle([BORDER_W, 53, L_WIDTH - BORDER_W - 1, 55], fill=COL_BORDER)
+
+    # Message body
+    lines = textwrap.fill(message, width=28).split('\n')
+    y = 80
+    for line in lines:
+        _center_text(draw, y, line.upper(), FONT_MD, fill=COL_FG)
+        y += 22
+
+    _show(disp, image)
+    if not HAS_LCD:
         print(f"\n[{title}] {message}")
 
 def show_warning_screen(disp, title, message):
-    show_message_screen(disp, title, message, color=(150, 50, 30))
+    show_message_screen(disp, title, message, color=COL_DANGER)
 
 def show_idle_screen(disp):
-    """Display waiting screen"""
-    L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-    draw = ImageDraw.Draw(image)
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
-    
-    draw.text((60, 100), "Ready to Scan", font=header_f, fill=(100, 200, 100))
-    draw.text((65, 130), f"Makerspace: {HTL_NAME}", font=small_f, fill=(150, 150, 150))
-    
-    if HAS_LCD:
-        disp.ShowImage(image.rotate(90, expand=True))
-    else:
+    """Idle screen — stark brutalist waiting state."""
+    image, draw = _new_frame()
+
+    # Outer border
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+
+    # Inner bordered box
+    _border_rect(draw, [20, 40, L_WIDTH - 21, L_HEIGHT - 60], fill=COL_BLOCK)
+
+    # Large SCAN text
+    _center_text(draw, 65, "SCAN", FONT_XL, fill=COL_ACCENT)
+
+    # Separator line
+    draw.rectangle([50, 105, L_WIDTH - 50, 107], fill=COL_BORDER)
+
+    # Subtitle
+    _center_text(draw, 120, "READY", FONT_LG, fill=COL_MUTED)
+
+    # Makerspace name at bottom
+    name = HTL_NAME[:30].upper()
+    _center_text(draw, L_HEIGHT - 45, name, FONT_SM, fill=COL_MUTED)
+
+    _show(disp, image)
+    if not HAS_LCD:
         print("\n[IDLE] Ready to Scan")
 
 def show_item_on_lcd(disp, part_detail, cart):
-    """Display current scanned item with shopping cart on the side"""
-    L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-    draw = ImageDraw.Draw(image)
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
-    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
-    price_f = ImageFont.truetype(font_path, 22) if os.path.exists(font_path) else ImageFont.load_default()
+    """Item view — brutalist split layout."""
+    image, draw = _new_frame()
+    SPLIT_X = 205  # Left: item | Right: cart
 
-    # Split view: Left side (200px) for item, Right side (120px) for cart
-    ITEM_WIDTH = 200
-    CART_X = ITEM_WIDTH
-    
+    # === LEFT PANEL — Item ===
+    _border_rect(draw, [0, 0, SPLIT_X - 1, L_HEIGHT - 1])
+
     if part_detail:
-        name = part_detail.get('name', 'Unknown Item')
+        name = part_detail.get('name', 'UNKNOWN')
         price = extract_price(part_detail)
-        
-        # Header
-        draw.rectangle([0, 0, ITEM_WIDTH, 35], fill=(30, 50, 90))
-        draw.text((8, 8), "ITEM SCANNED", font=header_f, fill=(255, 255, 255))
-        
-        # Item name (wrapped)
-        wrapped_name = textwrap.fill(name, width=18)
-        draw.text((105, 45), wrapped_name, font=body_f, fill=(255, 215, 0))
-        
-        # Price
-        draw.text((105, 140), "PRICE:", font=small_f, fill=(200, 200, 200))
-        draw.text((105, 160), format_price(price), font=price_f, fill=(50, 255, 50))
-        
-        # Image
+
+        # Header bar
+        draw.rectangle([BORDER_W, BORDER_W, SPLIT_X - BORDER_W - 1, 32], fill=COL_ACCENT)
+        draw.text((8, 8), "SCANNED", font=FONT_LG, fill=COL_FG)
+
+        # Item image
         img = get_image(part_detail)
         if img:
-            img.thumbnail((90, 90))
-            image.paste(img, (8, 45))
+            img.thumbnail((80, 80))
+            image.paste(img, (10, 42))
         else:
-            draw.rectangle([8, 45, 98, 135], outline=(80, 80, 80))
-            draw.text((20, 80), "NO\nIMAGE", font=small_f, fill=(80, 80, 80))
-    else:
-        draw.text((10, 100), "BARCODE NOT\nRECOGNIZED", font=header_f, fill=(255, 80, 80))
-    
-    # Shopping Cart on the right
-    draw.rectangle([CART_X, 0, L_WIDTH, L_HEIGHT], fill=(20, 20, 30))
-    draw.rectangle([CART_X, 0, L_WIDTH, 30], fill=(50, 30, 90))
-    draw.text((CART_X + 10, 7), "CART", font=body_f, fill=(255, 255, 255))
-    
-    y_offset = 35
-    if cart.is_empty():
-        draw.text((CART_X + 15, 100), "Empty", font=small_f, fill=(100, 100, 100))
-    else:
-        for part, qty in cart.items[:4]:  # Show max 4 items
-            item_name = part.get('name', 'Item')
-            if len(item_name) > 10:
-                item_name = item_name[:10] + "."
-            draw.text((CART_X + 5, y_offset), f"{qty}x", font=small_f, fill=(200, 200, 200))
-            draw.text((CART_X + 5, y_offset + 15), item_name, font=small_f, fill=(150, 150, 150))
-            y_offset += 40
-        
-        if len(cart.items) > 4:
-            draw.text((CART_X + 5, y_offset), f"+{len(cart.items)-4} more", font=small_f, fill=(100, 100, 100))
-        
-        # Total at bottom
-        draw.rectangle([CART_X, L_HEIGHT - 45, L_WIDTH, L_HEIGHT], fill=(30, 60, 30))
-        draw.text((CART_X + 5, L_HEIGHT - 40), "TOTAL", font=small_f, fill=(200, 200, 200))
-        draw.text((CART_X + 5, L_HEIGHT - 22), format_price(cart.get_total()), font=body_f, fill=(50, 255, 50))
+            _border_rect(draw, [10, 42, 90, 122], fill=COL_BLOCK)
+            draw.text((30, 72), "—", font=FONT_LG, fill=COL_MUTED)
 
-    if HAS_LCD:
-        disp.ShowImage(image.rotate(90, expand=True))
+        # Item name (right of image)
+        display_name = name[:16].upper()
+        if len(name) > 16:
+            draw.text((100, 44), display_name, font=FONT_MD, fill=COL_FG)
+            line2 = name[16:32].upper()
+            draw.text((100, 62), line2, font=FONT_MD, fill=COL_FG)
+        else:
+            draw.text((100, 50), display_name, font=FONT_MD, fill=COL_FG)
+
+        # Separator
+        draw.rectangle([BORDER_W, 130, SPLIT_X - BORDER_W - 1, 132], fill=COL_BORDER)
+
+        # Price — large, vermillion
+        draw.text((10, 142), "PRICE", font=FONT_SM, fill=COL_MUTED)
+        draw.text((10, 158), format_price(price), font=FONT_XL, fill=COL_ACCENT)
+
     else:
+        # Not found — big error
+        _center_text(draw, 70, "NOT", FONT_XL, fill=COL_ACCENT, area_width=SPLIT_X)
+        _center_text(draw, 105, "FOUND", FONT_XL, fill=COL_ACCENT, area_width=SPLIT_X)
+
+    # === RIGHT PANEL — Cart ===
+    _border_rect(draw, [SPLIT_X, 0, L_WIDTH - 1, L_HEIGHT - 1], fill=COL_BLOCK)
+
+    # Cart header
+    draw.rectangle([SPLIT_X + BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 28], fill=COL_BORDER)
+    draw.text((SPLIT_X + 10, 6), "CART", font=FONT_MD, fill=COL_BG)
+
+    if cart.is_empty():
+        draw.text((SPLIT_X + 20, 100), "EMPTY", font=FONT_SM, fill=COL_MUTED)
+    else:
+        y = 36
+        for part, qty in cart.items[:5]:
+            item_name = part.get('name', '?')[:9].upper()
+            draw.text((SPLIT_X + 6, y), f"{qty}×", font=FONT_SM, fill=COL_ACCENT)
+            draw.text((SPLIT_X + 6, y + 13), item_name, font=FONT_SM, fill=COL_FG)
+            y += 32
+
+        if len(cart.items) > 5:
+            draw.text((SPLIT_X + 6, y), f"+{len(cart.items)-5}", font=FONT_SM, fill=COL_MUTED)
+
+        # Total bar at bottom
+        draw.rectangle([SPLIT_X + BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_BG)
+        draw.rectangle([SPLIT_X, L_HEIGHT - 42, L_WIDTH - 1, L_HEIGHT - 42 + 2], fill=COL_BORDER)
+        draw.text((SPLIT_X + 6, L_HEIGHT - 36), format_price(cart.get_total()), font=FONT_LG, fill=COL_ACCENT2)
+
+    _show(disp, image)
+    if not HAS_LCD:
         print(f"\n[DISPLAY] {part_detail.get('name') if part_detail else 'N/A'} - {format_price(extract_price(part_detail))}")
         print(f"[CART] {len(cart.items)} items - Total: {format_price(cart.get_total())}")
 
 def show_confirmation_screen(disp, cart):
-    """Show checkout confirmation with all items"""
-    L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-    draw = ImageDraw.Draw(image)
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-    body_f = ImageFont.truetype(font_path, 14) if os.path.exists(font_path) else ImageFont.load_default()
-    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
-    
-    # Header
-    draw.rectangle([0, 0, L_WIDTH, 35], fill=(90, 50, 30))
-    draw.text((60, 8), "CHECKOUT", font=header_f, fill=(255, 255, 255))
-    
-    y_offset = 45
-    
-    # List items
-    for part, qty in cart.items[:5]:  # Show max 5 items
-        name = part.get('name', 'Item')
-        if len(name) > 20:
-            name = name[:20] + "..."
-        price = extract_price(part)
-        item_total = price * qty
-        
-        draw.text((10, y_offset), f"{qty}x {name}", font=small_f, fill=(200, 200, 200))
-        draw.text((230, y_offset), format_price(item_total), font=small_f, fill=(200, 200, 200))
-        y_offset += 25
-    
-    if len(cart.items) > 5:
-        draw.text((10, y_offset), f"+ {len(cart.items) - 5} more items...", font=small_f, fill=(150, 150, 150))
-        y_offset += 25
-    
-    # Total
-    draw.rectangle([0, L_HEIGHT - 60, L_WIDTH, L_HEIGHT - 25], fill=(30, 60, 30))
-    draw.text((10, L_HEIGHT - 55), "TOTAL:", font=header_f, fill=(255, 255, 255))
-    draw.text((180, L_HEIGHT - 55), format_price(cart.get_total()), font=header_f, fill=(50, 255, 50))
-    
-    # Instruction
-    draw.text((30, L_HEIGHT - 18), "Scan CONFIRM again to pay", font=small_f, fill=(255, 215, 0))
-    
-    if HAS_LCD:
-        disp.ShowImage(image.rotate(90, expand=True))
-    else:
+    """Checkout confirmation — brutalist item grid."""
+    image, draw = _new_frame()
+
+    # Outer border
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+
+    # Header block
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
+    _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
+
+    # Separator
+    draw.rectangle([BORDER_W, 37, L_WIDTH - BORDER_W - 1, 39], fill=COL_BORDER)
+
+    # Item list
+    y = 46
+    for part, qty in cart.items[:6]:
+        name = part.get('name', 'ITEM')[:22].upper()
+        price = extract_price(part) * qty
+
+        draw.text((10, y), f"{qty}×  {name}", font=FONT_SM, fill=COL_FG)
+        price_str = format_price(price)
+        pw = draw.textlength(price_str, font=FONT_SM)
+        draw.text((L_WIDTH - pw - 10, y), price_str, font=FONT_SM, fill=COL_ACCENT)
+        y += 22
+
+    if len(cart.items) > 6:
+        draw.text((10, y), f"+ {len(cart.items) - 6} MORE...", font=FONT_SM, fill=COL_MUTED)
+
+    # Total block at bottom
+    draw.rectangle([BORDER_W, L_HEIGHT - 65, L_WIDTH - BORDER_W - 1, L_HEIGHT - 38], fill=COL_BLOCK)
+    draw.rectangle([BORDER_W, L_HEIGHT - 67, L_WIDTH - BORDER_W - 1, L_HEIGHT - 65], fill=COL_BORDER)
+    draw.text((10, L_HEIGHT - 60), "TOTAL", font=FONT_LG, fill=COL_FG)
+    total_str = format_price(cart.get_total())
+    tw = draw.textlength(total_str, font=FONT_XL)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 63), total_str, font=FONT_XL, fill=COL_ACCENT2)
+
+    # Instruction bar
+    draw.rectangle([BORDER_W, L_HEIGHT - 32, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
+    _center_text(draw, L_HEIGHT - 28, "SCAN CONFIRM AGAIN", FONT_SM, fill=COL_FG)
+
+    _show(disp, image)
+    if not HAS_LCD:
         print("\n" + "="*40)
         print("CHECKOUT CONFIRMATION")
         print("="*40)
@@ -533,40 +583,41 @@ def generate_wero_qr(amount, description):
     return qr.make_image(fill_color="black", back_color="white")
 
 def show_payment_qr(disp, cart):
-    """Display Wero payment QR code"""
-    L_WIDTH, L_HEIGHT = 320, 240
-    image = Image.new('RGB', (L_WIDTH, L_HEIGHT), (15, 15, 25))
-    draw = ImageDraw.Draw(image)
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    header_f = ImageFont.truetype(font_path, 18) if os.path.exists(font_path) else ImageFont.load_default()
-    small_f = ImageFont.truetype(font_path, 12) if os.path.exists(font_path) else ImageFont.load_default()
-    
-    # Header
-    draw.rectangle([0, 0, L_WIDTH, 35], fill=(30, 90, 50))
-    draw.text((70, 8), "WERO PAYMENT", font=header_f, fill=(255, 255, 255))
-    
+    """Payment QR — brutalist framed QR code."""
+    image, draw = _new_frame()
+
+    # Outer border
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+
+    # Header block
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 30], fill=COL_SUCCESS)
+    _center_text(draw, 6, "WERO PAYMENT", FONT_LG, fill=COL_BG)
+
+    # Separator
+    draw.rectangle([BORDER_W, 33, L_WIDTH - BORDER_W - 1, 35], fill=COL_BORDER)
+
     # Generate and display QR code
     total = cart.get_total()
     description = cart.get_description()
     qr_img = generate_wero_qr(total, description)
-    
-    # Resize QR to fit
-    qr_img = qr_img.resize((160, 160))
-    image.paste(qr_img, (80, 45))
-    
-    # Amount and description
-    draw.text((100, 210), format_price(total), font=header_f, fill=(50, 255, 50))
-    
-    # Categories
-    cats = " - ".join(cart.get_categories())
-    if len(cats) > 30:
-        cats = cats[:30] + "..."
-    draw.text((10, 230), cats, font=small_f, fill=(200, 200, 200))
-    
-    if HAS_LCD:
-        disp.ShowImage(image.rotate(90, expand=True))
-    else:
+
+    # QR in a bordered box
+    qr_size = 150
+    qr_img = qr_img.resize((qr_size, qr_size))
+    qr_x = (L_WIDTH - qr_size) // 2
+    qr_y = 42
+    image.paste(qr_img, (qr_x, qr_y))
+    _border_rect(draw, [qr_x - 4, qr_y - 4, qr_x + qr_size + 3, qr_y + qr_size + 3])
+
+    # Amount — large, below QR
+    _center_text(draw, 200, format_price(total), FONT_XL, fill=COL_ACCENT2)
+
+    # Categories at very bottom
+    cats = " / ".join(cart.get_categories())[:35].upper()
+    _center_text(draw, L_HEIGHT - 18, cats, FONT_SM, fill=COL_MUTED)
+
+    _show(disp, image)
+    if not HAS_LCD:
         print("\n" + "="*40)
         print("WERO PAYMENT QR CODE")
         print("="*40)
