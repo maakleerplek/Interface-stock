@@ -349,7 +349,6 @@ class ShoppingCart:
         self.items = []  # List of (part_detail, quantity)
         self.confirm_state = 0  # 0: normal, 1: awaiting final confirm, 2: show QR
         self.cancel_state = 0   # 0: normal, 1: awaiting final cancel
-        self.remove_state = False # True if next scan should remove item
 
     def add_item(self, part_detail):
         """Add item to cart or increment quantity if already exists"""
@@ -359,16 +358,17 @@ class ShoppingCart:
                 return
         self.items.append((part_detail, 1))
 
-    def remove_item(self, part_detail):
-        """Decrease quantity or remove item from cart"""
-        for i, (item, qty) in enumerate(self.items):
-            if item.get('pk') == part_detail.get('pk'):
-                if qty > 1:
-                    self.items[i] = (item, qty - 1)
-                else:
-                    self.items.pop(i)
-                return True
-        return False
+    def remove_last_item(self):
+        """Undo: Remove the most recently added item (or decrease its quantity)"""
+        if not self.items:
+            return None
+        
+        part, qty = self.items[-1]
+        if qty > 1:
+            self.items[-1] = (part, qty - 1)
+        else:
+            self.items.pop()
+        return part
     def get_total(self):
         """Calculate total price of all items in cart"""
         total = 0.0
@@ -783,7 +783,7 @@ def main():
                 
                 continue
 
-            # Handle REMOVE barcode
+            # Handle REMOVE barcode (Undo)
             if barcode.upper() == REMOVE_BARCODE:
                 cart.confirm_state = 0
                 cart.cancel_state = 0
@@ -791,9 +791,14 @@ def main():
                     print("Cart is already empty.")
                     continue
                 
-                cart.remove_state = True
-                show_warning_screen(disp, "REMOVE MODE", "Scan an item to remove it from your cart")
-                print("Remove mode activated. Scan an item to remove.")
+                removed_part = cart.remove_last_item()
+                if removed_part:
+                    cat = extract_category(removed_part)
+                    name = removed_part.get('name', 'Item')
+                    print(f"UNDO: Removed {name} [{cat}]")
+                    show_message_screen(disp, "UNDO", f"Removed {name}", color=COL_DANGER)
+                    time.sleep(1.5)
+                    show_item_on_lcd(disp, None, cart) # Return to cart summary
                 continue
             
             # Normal item scan
@@ -806,24 +811,11 @@ def main():
             part = get_item_by_barcode(barcode)
             if part:
                 category = extract_category(part)
-                if cart.remove_state:
-                    if cart.remove_item(part):
-                        print(f"Removed: {part.get('name')} [{category}]")
-                        show_message_screen(disp, "REMOVED", f"Removed {part.get('name')}", color=COL_DANGER)
-                        time.sleep(1.5)
-                    else:
-                        print(f"Item not in cart: {part.get('name')} [{category}]")
-                        show_message_screen(disp, "NOT IN CART", f"{part.get('name')} is not in your cart", color=COL_MUTED)
-                        time.sleep(1.5)
-                    cart.remove_state = False
-                    show_item_on_lcd(disp, None, cart) # Show cart summary
-                else:
-                    cart.add_item(part)
-                    print(f"Added: {part.get('name')} [{category}] - {format_price(extract_price(part))}")
-                    print(f"Cart total: {format_price(cart.get_total())}")
-                    show_item_on_lcd(disp, part, cart)
+                cart.add_item(part)
+                print(f"Added: {part.get('name')} [{category}] - {format_price(extract_price(part))}")
+                print(f"Cart total: {format_price(cart.get_total())}")
+                show_item_on_lcd(disp, part, cart)
             else:
-                cart.remove_state = False
                 show_item_on_lcd(disp, None, cart)
             
     except KeyboardInterrupt:
