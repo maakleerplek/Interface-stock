@@ -724,9 +724,9 @@ def main():
                 raw = input("Scan: ").strip()
                 barcode = decode_manual_input(raw) if raw else ""
             
-            # Debounce: Ignore identical scans within 0.5 seconds
+            # Debounce: Ignore identical scans within 0.2 seconds
             current_time = time.time()
-            if not barcode or (current_time - last_scan_time) < 0.5:
+            if not barcode or (current_time - last_scan_time) < 0.2:
                 continue
             
             last_scan_time = current_time
