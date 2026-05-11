@@ -30,6 +30,7 @@ HTL_IBAN = os.getenv("VITE_PAYMENT_IBAN") or os.getenv("HTL_IBAN", "")
 # Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
 CANCEL_BARCODE = "CANCEL"
+REMOVE_BARCODE = "REMOVE"
 
 # AZERTY Scan Code Map (for evdev)
 SCAN_CODES = {
@@ -326,7 +327,8 @@ class ShoppingCart:
         self.items = []  # List of (part_detail, quantity)
         self.confirm_state = 0  # 0: normal, 1: awaiting final confirm, 2: show QR
         self.cancel_state = 0   # 0: normal, 1: awaiting final cancel
-    
+        self.remove_state = False # True if next scan should remove item
+
     def add_item(self, part_detail):
         """Add item to cart or increment quantity if already exists"""
         for i, (item, qty) in enumerate(self.items):
@@ -334,7 +336,17 @@ class ShoppingCart:
                 self.items[i] = (item, qty + 1)
                 return
         self.items.append((part_detail, 1))
-    
+
+    def remove_item(self, part_detail):
+        """Decrease quantity or remove item from cart"""
+        for i, (item, qty) in enumerate(self.items):
+            if item.get('pk') == part_detail.get('pk'):
+                if qty > 1:
+                    self.items[i] = (item, qty - 1)
+                else:
+                    self.items.pop(i)
+                return True
+        return False
     def get_total(self):
         """Calculate total price of all items in cart"""
         total = 0.0
@@ -720,6 +732,7 @@ def main():
             # Handle CONFIRM barcode
             if barcode.upper() == CONFIRM_BARCODE:
                 cart.cancel_state = 0 # Reset cancel state if confirming
+                cart.remove_state = False
                 if cart.is_empty():
                     print("Cart is empty! Add items first.")
                     continue
@@ -743,6 +756,19 @@ def main():
                     show_idle_screen(disp)
                 
                 continue
+
+            # Handle REMOVE barcode
+            if barcode.upper() == REMOVE_BARCODE:
+                cart.confirm_state = 0
+                cart.cancel_state = 0
+                if cart.is_empty():
+                    print("Cart is already empty.")
+                    continue
+                
+                cart.remove_state = True
+                show_warning_screen(disp, "REMOVE MODE", "Scan an item to remove it from your cart")
+                print("Remove mode activated. Scan an item to remove.")
+                continue
             
             # Normal item scan
             if cart.confirm_state != 0 or cart.cancel_state != 0:
@@ -753,11 +779,24 @@ def main():
             
             part = get_item_by_barcode(barcode)
             if part:
-                cart.add_item(part)
-                print(f"Added: {part.get('name')} - {format_price(extract_price(part))}")
-                print(f"Cart total: {format_price(cart.get_total())}")
-                show_item_on_lcd(disp, part, cart)
+                if cart.remove_state:
+                    if cart.remove_item(part):
+                        print(f"Removed: {part.get('name')}")
+                        show_message_screen(disp, "REMOVED", f"Removed {part.get('name')}", color=COL_DANGER)
+                        time.sleep(1.5)
+                    else:
+                        print(f"Item not in cart: {part.get('name')}")
+                        show_message_screen(disp, "NOT IN CART", f"{part.get('name')} is not in your cart", color=COL_MUTED)
+                        time.sleep(1.5)
+                    cart.remove_state = False
+                    show_item_on_lcd(disp, None, cart) # Show cart summary
+                else:
+                    cart.add_item(part)
+                    print(f"Added: {part.get('name')} - {format_price(extract_price(part))}")
+                    print(f"Cart total: {format_price(cart.get_total())}")
+                    show_item_on_lcd(disp, part, cart)
             else:
+                cart.remove_state = False
                 show_item_on_lcd(disp, None, cart)
             
     except KeyboardInterrupt:
