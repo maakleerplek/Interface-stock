@@ -246,36 +246,35 @@ def get_item_by_barcode(barcode):
     # --- Attempt 2: Search Part by EXACT Barcode field ---
     print(f"DEBUG: Searching Part barcode field for '{barcode}'...")
     try:
-        # Using ?barcode= is an exact filter in InvenTree
-        url = f"{INVENTREE_URL}/api/part/?barcode={barcode}"
-        response = requests.get(url, headers=headers, timeout=5, verify=False)
-        if response.status_code == 200:
-            items = response.json()
-            results = items if isinstance(items, list) else items.get("results", [])
-            for item in results:
-                # Extra safety check for exact match
-                if item.get("barcode") == barcode or item.get("IPN") == barcode:
-                    print(f"DEBUG: Found exact match: {item.get('name')}")
-                    BARCODE_CACHE.set(barcode, item)
-                    return item
-    except Exception as e:
-        print(f"DEBUG: Part Field Search Error: {e}")
+        # Check original, lowercase, and uppercase variants
+        variants = list(dict.fromkeys([barcode, barcode.lower(), barcode.upper()]))
+        for v in variants:
+            url = f"{INVENTREE_URL}/api/part/?barcode={v}"
+            response = requests.get(url, headers=headers, timeout=5, verify=False)
+            if response.status_code == 200:
+                items = response.json()
+                results = items if isinstance(items, list) else items.get("results", [])
+                for item in results:
+                    if item.get("barcode", "").lower() == v.lower() or item.get("IPN", "").lower() == v.lower():
+                        print(f"DEBUG: Found exact match (variant {v}): {item.get('name')}")
+                        BARCODE_CACHE.set(barcode, item)
+                        return item
 
-    # --- Attempt 3: Search Part by EXACT IPN field ---
-    print(f"DEBUG: Searching Part IPN field for '{barcode}'...")
-    try:
-        url = f"{INVENTREE_URL}/api/part/?IPN={barcode}"
-        response = requests.get(url, headers=headers, timeout=5, verify=False)
-        if response.status_code == 200:
-            items = response.json()
-            results = items if isinstance(items, list) else items.get("results", [])
-            for item in results:
-                if item.get("IPN") == barcode:
-                    print(f"DEBUG: Found exact IPN match: {item.get('name')}")
-                    BARCODE_CACHE.set(barcode, item)
-                    return item
+        # --- Attempt 3: Search Part by EXACT IPN field ---
+        print(f"DEBUG: Searching Part IPN field for variants of '{barcode}'...")
+        for v in variants:
+            url = f"{INVENTREE_URL}/api/part/?IPN={v}"
+            response = requests.get(url, headers=headers, timeout=5, verify=False)
+            if response.status_code == 200:
+                items = response.json()
+                results = items if isinstance(items, list) else items.get("results", [])
+                for item in results:
+                    if item.get("IPN", "").lower() == v.lower():
+                        print(f"DEBUG: Found exact IPN match (variant {v}): {item.get('name')}")
+                        BARCODE_CACHE.set(barcode, item)
+                        return item
     except Exception as e:
-        print(f"DEBUG: Part IPN Search Error: {e}")
+        print(f"DEBUG: Part Search Error: {e}")
 
     # --- Attempt 4: Search StockItem by EXACT Barcode field ---
     print(f"DEBUG: Searching StockItem barcode field for '{barcode}'...")
