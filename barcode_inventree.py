@@ -168,6 +168,7 @@ class BarcodeCache:
                 "image": part_detail.get("image"),
                 "category_detail": part_detail.get("category_detail"),
                 "category": part_detail.get("category"),
+                "_stock_item_pk": part_detail.get("_stock_item_pk"),
             }
             self.cache[barcode] = essential
             self.save()
@@ -225,7 +226,15 @@ def get_item_by_barcode(barcode):
             part = None
             if "stockitem" in res:
                 print("DEBUG: Processing StockItem match")
-                part = extract_from_obj(res["stockitem"])
+                s_obj = res["stockitem"]
+                # Extract stock item PK
+                stock_item_pk = None
+                if isinstance(s_obj, dict):
+                    stock_item_pk = s_obj.get("pk") or (s_obj.get("instance", {}).get("pk") if isinstance(s_obj.get("instance"), dict) else None)
+                
+                part = extract_from_obj(s_obj)
+                if part and stock_item_pk:
+                    part["_stock_item_pk"] = stock_item_pk
             
             elif "part" in res:
                 print("DEBUG: Processing Part match")
@@ -287,8 +296,10 @@ def get_item_by_barcode(barcode):
             for item in results:
                 if item.get("barcode") == barcode:
                     print(f"DEBUG: Found StockItem match, fetching part details")
+                    stock_item_pk = item.get("pk")
                     part = item.get("part_detail") or fetch_part_details(item.get("part"))
                     if part:
+                        part["_stock_item_pk"] = stock_item_pk
                         BARCODE_CACHE.set(barcode, part)
                         return part
     except Exception as e:
@@ -365,6 +376,74 @@ def get_image(part_detail):
 
 # --- 3. Shopping Cart Management ---
 
+def find_stock_item_for_part(part_id):
+    """Find a suitable stock item for a part (one with most quantity)"""
+    if not part_id: return None
+    headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
+    url = f"{INVENTREE_URL}/api/stock/?part={part_id}&in_stock=true"
+    try:
+        # We need verify=False because the URL is an IP with self-signed cert
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        if response.status_code == 200:
+            items = response.json()
+            results = items if isinstance(items, list) else items.get("results", [])
+            if results:
+                # Sort by quantity descending to pick the one with most stock
+                results.sort(key=lambda x: float(x.get('quantity', 0)), reverse=True)
+                return results[0].get('pk')
+    except Exception as e:
+        print(f"DEBUG: Error finding stock for part {part_id}: {e}")
+    return None
+
+def remove_stock_from_inventree(cart):
+    """Remove items in cart from InvenTree stock"""
+    if not INVENTREE_TOKEN:
+        print("Error: INVENTREE_TOKEN not configured. Stock not removed.")
+        return False
+
+    headers = {
+        "Authorization": f"Token {INVENTREE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    url = f"{INVENTREE_URL}/api/stock/remove/"
+    
+    items_to_remove = []
+    
+    for part_detail, quantity in cart.items:
+        # Use specific stock item if we have it (from barcode scan), otherwise find one
+        stock_item_pk = part_detail.get('_stock_item_pk') or find_stock_item_for_part(part_detail.get('pk'))
+        
+        if stock_item_pk:
+            items_to_remove.append({
+                "pk": stock_item_pk,
+                "quantity": float(quantity)
+            })
+        else:
+            print(f"WARNING: Could not find any stock for part {part_detail.get('name')} (ID: {part_detail.get('pk')})")
+
+    if not items_to_remove:
+        print("No stock items found to remove.")
+        return False
+
+    payload = {
+        "items": items_to_remove,
+        "notes": f"Purchased via Interface-stock ({HTL_NAME})"
+    }
+
+    try:
+        print(f"DEBUG: Removing stock for {len(items_to_remove)} items...")
+        response = requests.post(url, json=payload, headers=headers, timeout=10, verify=False)
+        if response.status_code in [200, 201]:
+            print("SUCCESS: Stock removed from InvenTree.")
+            return True
+        else:
+            print(f"ERROR: Failed to remove stock. Status: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"ERROR: Exception during stock removal: {e}")
+        return False
+
 class ShoppingCart:
     def __init__(self):
         self.items = []  # List of (part_detail, quantity)
@@ -373,8 +452,12 @@ class ShoppingCart:
 
     def add_item(self, part_detail):
         """Add item to cart or increment quantity if already exists"""
+        pk = part_detail.get('pk')
+        spk = part_detail.get('_stock_item_pk')
+        
         for i, (item, qty) in enumerate(self.items):
-            if item.get('pk') == part_detail.get('pk'):
+            # Same part AND same stock item (if applicable)
+            if item.get('pk') == pk and item.get('_stock_item_pk') == spk:
                 self.items[i] = (item, qty + 1)
                 return
         self.items.append((part_detail, 1))
@@ -585,16 +668,19 @@ def show_confirmation_screen(disp, cart):
         draw.text((10, y), f"+ {len(cart.items) - 6} MORE...", font=FONT_SM, fill=COL_MUTED)
 
     # Total block at bottom
-    draw.rectangle([BORDER_W, L_HEIGHT - 65, L_WIDTH - BORDER_W - 1, L_HEIGHT - 38], fill=COL_BLOCK)
-    draw.rectangle([BORDER_W, L_HEIGHT - 67, L_WIDTH - BORDER_W - 1, L_HEIGHT - 65], fill=COL_BORDER)
-    draw.text((10, L_HEIGHT - 60), "TOTAL", font=FONT_LG, fill=COL_FG)
+    draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
+    draw.rectangle([BORDER_W, L_HEIGHT - 82, L_WIDTH - BORDER_W - 1, L_HEIGHT - 80], fill=COL_BORDER)
+    draw.text((10, L_HEIGHT - 78), "TOTAL", font=FONT_LG, fill=COL_FG)
     total_str = format_price(cart.get_total())
     tw = draw.textlength(total_str, font=FONT_XL)
-    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 63), total_str, font=FONT_XL, fill=COL_ACCENT2)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL, fill=COL_ACCENT2)
+
+    # Stock warning
+    _center_text(draw, L_HEIGHT - 55, "SCANNING CONFIRM WILL REMOVE FROM STOCK", FONT_SM, fill=COL_ACCENT)
 
     # Instruction bar
-    draw.rectangle([BORDER_W, L_HEIGHT - 32, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
-    _center_text(draw, L_HEIGHT - 28, "SCAN CONFIRM AGAIN", FONT_SM, fill=COL_FG)
+    draw.rectangle([BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
+    _center_text(draw, L_HEIGHT - 34, "SCAN CONFIRM TO FINALIZE", FONT_SM, fill=COL_FG)
 
     _show(disp, image)
     if not HAS_LCD:
@@ -607,6 +693,7 @@ def show_confirmation_screen(disp, cart):
             print(f"{qty}x {name} - {format_price(price * qty)}")
         print("-"*40)
         print(f"TOTAL: {format_price(cart.get_total())}")
+        print("WARNING: NEXT CONFIRM REMOVES ITEMS FROM STOCK!")
         print("="*40)
         print("Scan CONFIRM again to proceed")
 
@@ -684,6 +771,17 @@ def show_payment_qr(disp, cart):
         print(f"Description: {description}")
         print("Scan QR code with your banking app")
         print("="*40)
+
+def check_inventree_connection():
+    """Check if the InvenTree server is reachable"""
+    if not INVENTREE_URL: return False
+    try:
+        # Check the base API endpoint
+        url = f"{INVENTREE_URL}/api/"
+        response = requests.get(url, timeout=3, verify=False)
+        return response.status_code == 200
+    except:
+        return False
 
 # --- 5. Main ---
 
@@ -810,26 +908,41 @@ def main():
             # Handle CONFIRM barcode
             if barcode.upper() == CONFIRM_BARCODE:
                 cart.cancel_state = 0 # Reset cancel state if confirming
-                cart.remove_state = False
                 if cart.is_empty():
                     print("Cart is empty! Add items first.")
                     continue
                 
                 if cart.confirm_state == 0:
+                    # CHECK CONNECTION BEFORE PROCEEDING
+                    print("DEBUG: Checking InvenTree connection...")
+                    if not check_inventree_connection():
+                        print("ERROR: InvenTree unreachable. Blocking checkout.")
+                        show_warning_screen(disp, "OFFLINE", "InvenTree server is not reachable. Cannot checkout.")
+                        continue
+
                     # First confirm - show checkout screen
                     cart.confirm_state = 1
                     show_confirmation_screen(disp, cart)
                     print("First CONFIRM received. Scan CONFIRM again to generate payment QR.")
                 
                 elif cart.confirm_state == 1:
-                    # Second confirm - show payment QR
+                    # Second confirm - remove stock and show payment QR
+                    print(f"Transaction locked in! Finalizing {len(cart.items)} items...")
+                    
+                    # Show "PROCESSING" message
+                    show_message_screen(disp, "PROCESSING", "Removing items from InvenTree stock...", color=COL_ACCENT2)
+                    
+                    # Call stock removal API
+                    remove_stock_from_inventree(cart)
+                    
+                    # Show payment QR
                     cart.confirm_state = 2
                     show_payment_qr(disp, cart)
-                    print("Payment QR displayed. Scan CONFIRM/CANCEL/ITEM to start new session.")
+                    print("Payment QR displayed. Scan CONFIRM/CANCEL/ITEM to finish.")
                 
                 elif cart.confirm_state == 2:
-                    # Third confirm (or any scan after QR) - clear cart and start over
-                    print(f"Transaction complete! Cleared {len(cart.items)} items.")
+                    # Third confirm (or any scan after QR) - just clear cart and start over
+                    print("Session finished. Clearing cart.")
                     cart.clear()
                     show_idle_screen(disp)
                 

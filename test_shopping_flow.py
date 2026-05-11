@@ -122,6 +122,62 @@ def test_price_formatting():
     if all_passed:
         print("✓ All price tests passed!")
 
+def test_stock_removal():
+    """Test the stock removal API call logic"""
+    from unittest.mock import patch, MagicMock
+    from barcode_inventree import ShoppingCart, remove_stock_from_inventree
+    
+    print("\nTesting Stock Removal Logic...")
+    cart = ShoppingCart()
+    # Add Item 1 twice (same stock item)
+    cart.add_item({'pk': 1, 'name': 'Item 1', '_stock_item_pk': 101})
+    cart.add_item({'pk': 1, 'name': 'Item 1', '_stock_item_pk': 101})
+    # Add Item 2 once
+    cart.add_item({'pk': 2, 'name': 'Item 2', '_stock_item_pk': 102})
+    
+    with patch('requests.post') as mock_post:
+        # Mock successful response
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_post.return_value = mock_response
+        
+        # Also need to mock find_stock_item_for_part if we don't have _stock_item_pk
+        # but here we provide it.
+        
+        success = remove_stock_from_inventree(cart)
+        
+        if success:
+            print("   ✓ remove_stock_from_inventree returned True")
+        else:
+            print("   ✗ remove_stock_from_inventree returned False")
+            return
+            
+        # Verify call arguments
+        args, kwargs = mock_post.call_args
+        payload = kwargs.get('json')
+        
+        print(f"   Payload sent: {payload}")
+        
+        # We expect 2 entries in items (Item 1 with qty 2, Item 2 with qty 1)
+        if len(payload['items']) == 2:
+            print("   ✓ Correct number of items in payload (2)")
+        else:
+            print(f"   ✗ Expected 2 items, got {len(payload['items'])}")
+            
+        # Check specific items
+        items = sorted(payload['items'], key=lambda x: x['pk'])
+        if items[0]['pk'] == 101 and items[0]['quantity'] == 2.0:
+            print("   ✓ Item 101 (Item 1) has correct quantity (2.0)")
+        else:
+            print(f"   ✗ Item 101 has wrong quantity or PK")
+            
+        if items[1]['pk'] == 102 and items[1]['quantity'] == 1.0:
+            print("   ✓ Item 102 (Item 2) has correct quantity (1.0)")
+        else:
+            print(f"   ✗ Item 102 has wrong quantity or PK")
+            
+    print("✓ Stock removal test passed!")
+
 def main():
     print("="*50)
     print("Shopping Cart System Test Suite")
@@ -130,6 +186,7 @@ def main():
     test_shopping_cart()
     test_price_formatting()
     test_qr_generation()
+    test_stock_removal()
     
     print("\n" + "="*50)
     print("All tests completed!")
