@@ -335,12 +335,33 @@ def extract_category(part_detail):
 def get_image(part_detail):
     img_path = part_detail.get('thumbnail') or part_detail.get('image')
     if not img_path: return None
+    
+    # Generate a local filename based on the part ID and filename
+    part_id = part_detail.get('pk', 'unknown')
+    ext = os.path.splitext(img_path)[1] or ".png"
+    local_filename = f"image_cache/part_{part_id}{ext}"
+    
+    # 1. Check if we have it locally already
+    if os.path.exists(local_filename):
+        try:
+            return Image.open(local_filename)
+        except:
+            pass # If file is corrupt, try re-downloading
+            
+    # 2. Download and cache
     img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
     try:
         headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
         response = requests.get(img_url, headers=headers, timeout=5, verify=False)
-        return Image.open(BytesIO(response.content))
-    except: return None
+        if response.status_code == 200:
+            img_data = response.content
+            # Save for next time
+            with open(local_filename, "wb") as f:
+                f.write(img_data)
+            return Image.open(BytesIO(img_data))
+    except Exception as e:
+        print(f"DEBUG: Image fetch error: {e}")
+    return None
 
 # --- 3. Shopping Cart Management ---
 
@@ -676,22 +697,31 @@ def find_scanner():
     except: pass
     return None
 
+import select
+
 def read_scancode(device):
     barcode = ""
-    for event in device.read_loop():
-        if event.type == ecodes.EV_KEY:
-            data = evdev.categorize(event)
-            if data.keystate == 1: # Key Down
-                if data.scancode == ecodes.KEY_ENTER:
-                    res = barcode
-                    barcode = ""
-                    if res: return res
-                else:
-                    char = SCAN_CODES.get(data.scancode)
-                    if char is not None:
-                        barcode += char
-                    else:
-                        print(f"DEBUG: Unknown scancode {data.scancode}")
+    try:
+        while True:
+            # Use select for a non-blocking read with a 1-second timeout
+            r, w, x = select.select([device], [], [], 1.0)
+            if not r:
+                return "" # No data within 1 second, return empty to let main loop check timeout
+
+            for event in device.read():
+                if event.type == ecodes.EV_KEY:
+                    data = evdev.categorize(event)
+                    if data.keystate == 1: # Key Down
+                        if data.scancode == ecodes.KEY_ENTER:
+                            res = barcode.strip()
+                            barcode = ""
+                            if res: return res
+                        else:
+                            char = SCAN_CODES.get(data.scancode)
+                            if char is not None:
+                                barcode += char
+    except Exception as e:
+        print(f"Scanner Error: {e}")
     return None
 
 def main():
@@ -716,17 +746,39 @@ def main():
 
     cart = ShoppingCart()
     last_scan_time = 0
+    last_interaction_time = time.time()
+    TIMEOUT_SECONDS = 300 # 5 minutes
     
     # Show initial screen
     show_idle_screen(disp)
     
     try:
         while True:
+            # Check for inactivity timeout (only if cart is not empty or not on idle screen)
+            if not cart.is_empty() or cart.confirm_state != 0:
+                if (time.time() - last_interaction_time) > TIMEOUT_SECONDS:
+                    print("Inactivity timeout. Clearing cart.")
+                    cart.clear()
+                    show_message_screen(disp, "TIMEOUT", "Inactivity timeout. Cart cleared.", color=COL_MUTED)
+                    time.sleep(2)
+                    show_idle_screen(disp)
+                    last_interaction_time = time.time()
+
             if scanner:
+                # Use a small timeout on scancode reading to allow the main loop to check for inactivity
+                # This depends on how read_scancode is implemented
                 barcode = read_scancode(scanner)
             else:
+                # For manual input, we can't easily do a non-blocking timeout here without refactoring
+                # so we'll just wait for input
                 raw = input("Scan: ").strip()
                 barcode = decode_manual_input(raw) if raw else ""
+            
+            # If no barcode was scanned in this loop, just continue
+            if not barcode:
+                continue
+
+            last_interaction_time = time.time() # Reset timeout on any scan
             
             # Debounce: Ignore identical scans within 0.2 seconds
             current_time = time.time()
