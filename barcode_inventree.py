@@ -586,12 +586,9 @@ def show_confirmation_screen(disp, cart):
 
 def generate_wero_qr(amount, description):
     """Generate Wero payment QR code
-    
     Wero uses EPC QR codes (European Payments Council standard)
-    Format: https://www.europeanpaymentscouncil.eu/document-library/guidance-documents/quick-response-code-guidelines-enable-data-capture-initiation
     """
     # EPC QR Code format for SEPA Credit Transfer
-    # This is a standard format that most European banking apps support
     epc_data = [
         "BCD",  # Service tag
         "002",  # Version
@@ -599,20 +596,20 @@ def generate_wero_qr(amount, description):
         "SCT",  # Identification (SEPA Credit Transfer)
         "",     # BIC (optional, can be empty)
         HTL_NAME,  # Beneficiary name
-        HTL_IBAN,  # Beneficiary account (IBAN)
+        HTL_IBAN.replace(" ", ""),  # Beneficiary account (IBAN) - Remove spaces for QR
         f"EUR{amount:.2f}",  # Amount
         "",     # Purpose (optional)
         "",     # Structured reference (optional)
-        description  # Unstructured remittance information
+        description[:140]  # Unstructured remittance information (max 140 chars)
     ]
-    
+
     qr_content = "\n".join(epc_data)
-    
-    # Generate QR code
-    qr = qrcode.QRCode(version=1, box_size=4, border=2)
+
+    # Generate QR code with minimal border to maximize size on small LCD
+    qr = qrcode.QRCode(version=1, box_size=10, border=1, error_correction=qrcode.constants.ERROR_CORRECT_L)
     qr.add_data(qr_content)
     qr.make(fit=True)
-    
+
     return qr.make_image(fill_color="black", back_color="white")
 
 def show_payment_qr(disp, cart):
@@ -624,7 +621,7 @@ def show_payment_qr(disp, cart):
 
     # Header block
     draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 30], fill=COL_SUCCESS)
-    _center_text(draw, 6, "WERO PAYMENT", FONT_LG, fill=COL_BG)
+    _center_text(draw, 6, "SCAN TO PAY", FONT_LG, fill=COL_BG)
 
     # Separator
     draw.rectangle([BORDER_W, 33, L_WIDTH - BORDER_W - 1, 35], fill=COL_BORDER)
@@ -634,22 +631,22 @@ def show_payment_qr(disp, cart):
     description = cart.get_description()
     qr_img = generate_wero_qr(total, description)
 
-    # QR in a bordered box
-    qr_size = 150
-    qr_img = qr_img.resize((qr_size, qr_size))
+    # QR in a bordered box - resized to fit nicely on the 240px height
+    qr_size = 140
+    qr_img = qr_img.resize((qr_size, qr_size), Image.NEAREST)
     qr_x = (L_WIDTH - qr_size) // 2
-    qr_y = 42
+    qr_y = 45
     image.paste(qr_img, (qr_x, qr_y))
-    _border_rect(draw, [qr_x - 4, qr_y - 4, qr_x + qr_size + 3, qr_y + qr_size + 3])
+    _border_rect(draw, [qr_x - 2, qr_y - 2, qr_x + qr_size + 1, qr_y + qr_size + 1], width=2)
 
     # Amount — large, below QR
-    _center_text(draw, 200, format_price(total), FONT_XL, fill=COL_ACCENT2)
+    _center_text(draw, 195, format_price(total), FONT_XL, fill=COL_ACCENT2)
 
-    # Categories at very bottom
-    cats = " / ".join(cart.get_categories())[:35].upper()
-    _center_text(draw, L_HEIGHT - 18, cats, FONT_SM, fill=COL_MUTED)
+    # Beneficiary at very bottom
+    _center_text(draw, L_HEIGHT - 18, HTL_NAME.upper(), FONT_SM, fill=COL_MUTED)
 
     _show(disp, image)
+
     if not HAS_LCD:
         print("\n" + "="*40)
         print("WERO PAYMENT QR CODE")
@@ -673,20 +670,25 @@ def find_scanner():
 
 def read_scancode(device):
     barcode = ""
-    for event in device.read_loop():
-        if event.type == ecodes.EV_KEY:
-            data = evdev.categorize(event)
-            if data.keystate == 1: # Key Down
-                if data.scancode == ecodes.KEY_ENTER:
-                    res = barcode
-                    barcode = ""
-                    if res: return res
-                else:
-                    char = SCAN_CODES.get(data.scancode)
-                    if char is not None:
-                        barcode += char
+    try:
+        for event in device.read_loop():
+            if event.type == ecodes.EV_KEY:
+                data = evdev.categorize(event)
+                if data.keystate == 1: # Key Down
+                    if data.scancode == ecodes.KEY_ENTER:
+                        res = barcode.strip()
+                        if res: return res
+                        barcode = ""
                     else:
-                        print(f"DEBUG: Unknown scancode {data.scancode}")
+                        char = SCAN_CODES.get(data.scancode)
+                        if char is not None:
+                            barcode += char
+                        else:
+                            # Also check lowercase variants if not in SCAN_CODES
+                            # (Some scanners send different codes for shifted/non-shifted)
+                            pass 
+    except Exception as e:
+        print(f"Scanner Error: {e}")
     return None
 
 def main():
