@@ -249,7 +249,7 @@ def get_item_by_barcode(barcode):
         # Check original, lowercase, and uppercase variants
         variants = list(dict.fromkeys([barcode, barcode.lower(), barcode.upper()]))
         for v in variants:
-            url = f"{INVENTREE_URL}/api/part/?barcode={v}"
+            url = f"{INVENTREE_URL}/api/part/?barcode={v}&category_detail=true"
             response = requests.get(url, headers=headers, timeout=5, verify=False)
             if response.status_code == 200:
                 items = response.json()
@@ -263,7 +263,7 @@ def get_item_by_barcode(barcode):
         # --- Attempt 3: Search Part by EXACT IPN field ---
         print(f"DEBUG: Searching Part IPN field for variants of '{barcode}'...")
         for v in variants:
-            url = f"{INVENTREE_URL}/api/part/?IPN={v}"
+            url = f"{INVENTREE_URL}/api/part/?IPN={v}&category_detail=true"
             response = requests.get(url, headers=headers, timeout=5, verify=False)
             if response.status_code == 200:
                 items = response.json()
@@ -279,7 +279,7 @@ def get_item_by_barcode(barcode):
     # --- Attempt 4: Search StockItem by EXACT Barcode field ---
     print(f"DEBUG: Searching StockItem barcode field for '{barcode}'...")
     try:
-        url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}"
+        url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}&part_detail=true"
         response = requests.get(url, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             items = response.json()
@@ -316,15 +316,19 @@ def extract_category(part_detail):
     """Extract category name from part detail"""
     if not part_detail: return "uncategorized"
     
-    # Try to get category_detail first (more detailed)
+    # Try to get category_detail first
     cat_detail = part_detail.get('category_detail')
-    if cat_detail and isinstance(cat_detail, dict):
-        return cat_detail.get('name', 'uncategorized').lower()
+    if isinstance(cat_detail, dict) and cat_detail.get('name'):
+        return cat_detail.get('name').lower()
     
-    # Fall back to category field (might just be an ID)
-    category = part_detail.get('category')
-    if category and isinstance(category, str):
-        return category.lower()
+    # Check if category path is available
+    path = part_detail.get('category_path')
+    if path and isinstance(path, str):
+        return path.split('/')[-1].lower()
+
+    # Fall back to category name if it's directly in the object
+    if isinstance(part_detail.get('category_name'), str):
+        return part_detail.get('category_name').lower()
     
     return "uncategorized"
 
@@ -380,11 +384,12 @@ class ShoppingCart:
         return sorted(categories)
     
     def get_description(self):
-        """Generate description for payment (category list)"""
+        """Generate description for payment (comma separated category list)"""
         categories = self.get_categories()
         if not categories:
             return f"{HTL_NAME} - Purchase"
-        return f"{HTL_NAME} - " + " - ".join(categories)
+        # Join unique categories with commas
+        return f"{HTL_NAME}: " + ",".join(categories)
     
     def clear(self):
         """Clear the cart and reset states"""
