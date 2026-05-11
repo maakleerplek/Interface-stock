@@ -35,10 +35,12 @@ REMOVE_BARCODE = "REMOVE"
 # AZERTY Scan Code Map (for evdev)
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
+    12: '-', 13: '=', 
     16: 'Q', 17: 'W', 18: 'E', 19: 'R', 20: 'T', 21: 'Y', 22: 'U', 23: 'I', 24: 'O', 25: 'P',
     30: 'A', 31: 'S', 32: 'D', 33: 'F', 34: 'G', 35: 'H', 36: 'J', 37: 'K', 38: 'L',
     44: 'Z', 45: 'X', 46: 'C', 47: 'V', 48: 'B', 49: 'N', 50: 'M',
-    57: ' ', # Space
+    51: ',', 52: '.', 53: '/', 57: ' ', 
+    12: '_', # Common mapping for underscores in some scanners
     ecodes.KEY_ENTER: '\n',
 }
 
@@ -46,6 +48,7 @@ SCAN_CODES = {
 AZERTY_MAP = {
     '&': '1', 'é': '2', '"': '3', "'": '4', '(': '5',
     '§': '6', 'è': '7', '!': '8', 'ç': '9', 'à': '0',
+    ')': '-', '_': '_', '=': '=', '+': '+',
 }
 
 def decode_manual_input(scanned_text):
@@ -258,7 +261,23 @@ def get_item_by_barcode(barcode):
     except Exception as e:
         print(f"DEBUG: Part Field Search Error: {e}")
 
-    # --- Attempt 3: Search StockItem by EXACT Barcode field ---
+    # --- Attempt 3: Search Part by EXACT IPN field ---
+    print(f"DEBUG: Searching Part IPN field for '{barcode}'...")
+    try:
+        url = f"{INVENTREE_URL}/api/part/?IPN={barcode}"
+        response = requests.get(url, headers=headers, timeout=5, verify=False)
+        if response.status_code == 200:
+            items = response.json()
+            results = items if isinstance(items, list) else items.get("results", [])
+            for item in results:
+                if item.get("IPN") == barcode:
+                    print(f"DEBUG: Found exact IPN match: {item.get('name')}")
+                    BARCODE_CACHE.set(barcode, item)
+                    return item
+    except Exception as e:
+        print(f"DEBUG: Part IPN Search Error: {e}")
+
+    # --- Attempt 4: Search StockItem by EXACT Barcode field ---
     print(f"DEBUG: Searching StockItem barcode field for '{barcode}'...")
     try:
         url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}"
@@ -664,8 +683,11 @@ def read_scancode(device):
                     barcode = ""
                     if res: return res
                 else:
-                    char = SCAN_CODES.get(data.scancode, "")
-                    barcode += char
+                    char = SCAN_CODES.get(data.scancode)
+                    if char is not None:
+                        barcode += char
+                    else:
+                        print(f"DEBUG: Unknown scancode {data.scancode}")
     return None
 
 def main():
