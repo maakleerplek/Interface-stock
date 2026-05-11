@@ -32,9 +32,12 @@ CONFIRM_BARCODE = "CONFIRM"
 CANCEL_BARCODE = "CANCEL"
 
 # AZERTY Scan Code Map (for evdev)
-# ... (rest of SCAN_CODES and AZERTY_MAP)
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
+    16: 'Q', 17: 'W', 18: 'E', 19: 'R', 20: 'T', 21: 'Y', 22: 'U', 23: 'I', 24: 'O', 25: 'P',
+    30: 'A', 31: 'S', 32: 'D', 33: 'F', 34: 'G', 35: 'H', 36: 'J', 37: 'K', 38: 'L',
+    44: 'Z', 45: 'X', 46: 'C', 47: 'V', 48: 'B', 49: 'N', 50: 'M',
+    57: ' ', # Space
     ecodes.KEY_ENTER: '\n',
 }
 
@@ -696,7 +699,7 @@ def main():
             print(f"Scanned: {barcode}")
             
             # Handle CANCEL barcode
-            if barcode == CANCEL_BARCODE:
+            if barcode.upper() == CANCEL_BARCODE:
                 cart.confirm_state = 0 # Reset confirm state if cancelling
                 if cart.is_empty():
                     print("Cart is already empty.")
@@ -715,7 +718,7 @@ def main():
                 continue
 
             # Handle CONFIRM barcode
-            if barcode == CONFIRM_BARCODE:
+            if barcode.upper() == CONFIRM_BARCODE:
                 cart.cancel_state = 0 # Reset cancel state if confirming
                 if cart.is_empty():
                     print("Cart is empty! Add items first.")
