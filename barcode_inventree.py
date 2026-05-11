@@ -805,20 +805,21 @@ def main():
             
             part = get_item_by_barcode(barcode)
             if part:
+                category = extract_category(part)
                 if cart.remove_state:
                     if cart.remove_item(part):
-                        print(f"Removed: {part.get('name')}")
+                        print(f"Removed: {part.get('name')} [{category}]")
                         show_message_screen(disp, "REMOVED", f"Removed {part.get('name')}", color=COL_DANGER)
                         time.sleep(1.5)
                     else:
-                        print(f"Item not in cart: {part.get('name')}")
+                        print(f"Item not in cart: {part.get('name')} [{category}]")
                         show_message_screen(disp, "NOT IN CART", f"{part.get('name')} is not in your cart", color=COL_MUTED)
                         time.sleep(1.5)
                     cart.remove_state = False
                     show_item_on_lcd(disp, None, cart) # Show cart summary
                 else:
                     cart.add_item(part)
-                    print(f"Added: {part.get('name')} - {format_price(extract_price(part))}")
+                    print(f"Added: {part.get('name')} [{category}] - {format_price(extract_price(part))}")
                     print(f"Cart total: {format_price(cart.get_total())}")
                     show_item_on_lcd(disp, part, cart)
             else:
