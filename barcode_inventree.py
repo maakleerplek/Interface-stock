@@ -396,16 +396,15 @@ def find_stock_item_for_part(part_id):
         print(f"DEBUG: Error finding stock for part {part_id}: {e}")
     return None
 
-def send_changelog_event(action, item_name, quantity):
+def send_changelog_event(action, item_name, quantity, price=None):
     """Fire-and-forget: notify tv-presentation changelog endpoint."""
     if not TV_PRESENTATION_URL:
         return
     try:
-        requests.post(
-            f"{TV_PRESENTATION_URL}/api/changelog",
-            json={"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)},
-            timeout=3,
-        )
+        payload = {"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)}
+        if price is not None:
+            payload["price"] = round(float(price), 2)
+        requests.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
     except Exception:
         pass  # Non-critical — never block the main checkout flow
 
@@ -450,7 +449,9 @@ def remove_stock_from_inventree(cart):
         if response.status_code in [200, 201]:
             print("SUCCESS: Stock removed from InvenTree.")
             for part_detail, quantity in cart.items:
-                send_changelog_event("checkout", part_detail.get("name", "Unknown"), quantity)
+                unit_price = extract_price(part_detail)
+                total_price = unit_price * quantity if unit_price else None
+                send_changelog_event("checkout", part_detail.get("name", "Unknown"), quantity, total_price)
             return True
         else:
             print(f"ERROR: Failed to remove stock. Status: {response.status_code}")
