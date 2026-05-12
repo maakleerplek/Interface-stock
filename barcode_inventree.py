@@ -26,6 +26,7 @@ INVENTREE_TOKEN = os.getenv("INVENTREE_TOKEN")
 HTL_NAME = os.getenv("VITE_PAYMENT_NAME") or os.getenv("HTL_NAME", "HTL Makerspace")
 HTL_CODE = os.getenv("HTL_CODE", "HTL001")
 HTL_IBAN = os.getenv("VITE_PAYMENT_IBAN") or os.getenv("HTL_IBAN", "")
+TV_PRESENTATION_URL = os.getenv("TV_PRESENTATION_URL", "")
 
 # Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
@@ -395,6 +396,19 @@ def find_stock_item_for_part(part_id):
         print(f"DEBUG: Error finding stock for part {part_id}: {e}")
     return None
 
+def send_changelog_event(action, item_name, quantity):
+    """Fire-and-forget: notify tv-presentation changelog endpoint."""
+    if not TV_PRESENTATION_URL:
+        return
+    try:
+        requests.post(
+            f"{TV_PRESENTATION_URL}/api/changelog",
+            json={"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)},
+            timeout=3,
+        )
+    except Exception:
+        pass  # Non-critical — never block the main checkout flow
+
 def remove_stock_from_inventree(cart):
     """Remove items in cart from InvenTree stock"""
     if not INVENTREE_TOKEN:
@@ -435,6 +449,8 @@ def remove_stock_from_inventree(cart):
         response = requests.post(url, json=payload, headers=headers, timeout=10, verify=False)
         if response.status_code in [200, 201]:
             print("SUCCESS: Stock removed from InvenTree.")
+            for part_detail, quantity in cart.items:
+                send_changelog_event("checkout", part_detail.get("name", "Unknown"), quantity)
             return True
         else:
             print(f"ERROR: Failed to remove stock. Status: {response.status_code}")

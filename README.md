@@ -118,6 +118,9 @@ The `barcode_inventree.py` script is a complete shopping cart system with InvenT
    - `VITE_PAYMENT_NAME` - Makerspace/organization name for payments
    - `VITE_PAYMENT_IBAN` - IBAN for payment QR codes
 
+   Optional variables:
+   - `TV_PRESENTATION_URL` - URL of the tv-presentation server (e.g. `http://10.72.3.141:8083`). When set, each successful checkout sends a `POST /api/changelog` event so the TV display shows a live "Recent activity" feed. Leave empty to disable.
+
 2. **Install dependencies**:
    ```bash
    source .venv/bin/activate
