@@ -123,6 +123,22 @@ else
 fi
 
 echo ""
+echo "--- Setting up TV CEC timers ---"
+INSTALL_DIR=$(pwd)
+chmod +x "$INSTALL_DIR/scripts/tv-on.sh" "$INSTALL_DIR/scripts/tv-off.sh"
+
+for unit in tv-on tv-off; do
+    sed "s|/home/pi/Interface-stock|${INSTALL_DIR}|g" \
+        "$INSTALL_DIR/systemd/${unit}.service" \
+        | sudo tee /etc/systemd/system/${unit}.service > /dev/null
+    sudo cp "$INSTALL_DIR/systemd/${unit}.timer" /etc/systemd/system/${unit}.timer
+done
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now tv-on.timer tv-off.timer
+echo "TV timers installed: on at 10:00, off at 12:00 daily."
+
+echo ""
 echo "--- Setup Complete ---"
 echo ""
 echo "==================================================================="
