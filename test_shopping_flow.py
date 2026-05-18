@@ -67,11 +67,7 @@ def test_shopping_cart():
     
     # Test confirm states
     print(f"\n4. Testing confirm states:")
-    print(f"   Initial state: {cart.confirm_state}")
-    cart.confirm_state = 1
-    print(f"   After first confirm: {cart.confirm_state}")
-    cart.confirm_state = 2
-    print(f"   After second confirm: {cart.confirm_state}")
+    print(f"   (Skipped: state machine is now handled outside ShoppingCart class)")
     
     # Test clearing
     print(f"\n5. Testing cart clear:")
@@ -79,19 +75,18 @@ def test_shopping_cart():
     cart.clear()
     print(f"   Items after clear: {len(cart.items)}")
     print(f"   Is empty: {cart.is_empty()}")
-    print(f"   Confirm state reset: {cart.confirm_state}")
     
     print("\n✓ All tests passed!")
 
 def test_qr_generation():
-    """Test QR code generation"""
-    from barcode_inventree import generate_wero_qr
+    """Test QR code text generation"""
+    from barcode_inventree import generate_epc_qr_text
     
-    print("\nTesting Wero QR generation...")
+    print("\nTesting EPC QR generation...")
     try:
-        qr_img = generate_wero_qr(25.50, "HTL Makerspace - drink - wood")
-        print(f"   QR code generated successfully")
-        print(f"   Size: {qr_img.size}")
+        qr_text = generate_epc_qr_text(25.50, "HTL Makerspace - drink - wood")
+        print(f"   QR text generated successfully:")
+        print(f"   {qr_text.splitlines()[:2]} ...")
         print("✓ QR generation test passed!")
     except Exception as e:
         print(f"✗ QR generation failed: {e}")
@@ -145,12 +140,12 @@ def test_stock_removal():
         # Also need to mock find_stock_item_for_part if we don't have _stock_item_pk
         # but here we provide it.
         
-        success = remove_stock_from_inventree(cart)
+        success, err_msg = remove_stock_from_inventree(cart)
         
         if success:
             print("   ✓ remove_stock_from_inventree returned True")
         else:
-            print("   ✗ remove_stock_from_inventree returned False")
+            print(f"   ✗ remove_stock_from_inventree returned False. Msg: {err_msg}")
             return
             
         # Verify call arguments
