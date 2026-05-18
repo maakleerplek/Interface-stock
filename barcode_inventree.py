@@ -2,8 +2,13 @@ import os
 import sys
 import time
 import json
+import glob
+import textwrap
 import requests
 import threading
+import qrcode
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from enum import Enum
 from dotenv import load_dotenv
 
@@ -37,7 +42,6 @@ CANCEL_BARCODE = "CANCEL"
 REMOVE_BARCODE = "REMOVE"
 
 # AZERTY Scan Code Map (for evdev)
-# Removed duplicate key 12, kept it as '_' (often maps to '-' or '_' depending on scanner)
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     12: '_', 13: '=', 
@@ -61,14 +65,78 @@ def decode_manual_input(scanned_text):
 
 # --- State Machine ---
 class AppState(Enum):
-    IDLE = "IDLE"                           # Ready for new customer
-    SHOPPING = "SHOPPING"                   # Cart has items
-    CANCEL_CONFIRM = "CANCEL_CONFIRM"       # Asked if they really want to cancel
-    CHECKOUT_CONFIRM = "CHECKOUT_CONFIRM"   # Showing summary, waiting to lock in
-    QR_DISPLAY = "QR_DISPLAY"               # Stock removed, showing payment info
+    IDLE = "IDLE"
+    SHOPPING = "SHOPPING"
+    CANCEL_CONFIRM = "CANCEL_CONFIRM"
+    CHECKOUT_CONFIRM = "CHECKOUT_CONFIRM"
+    PROCESSING = "PROCESSING"
+    QR_DISPLAY = "QR_DISPLAY"
+
+# --- BRUTALISM DESIGN SYSTEM ---
+COL_BG      = (10, 10, 10)       # Near-black background
+COL_FG      = (240, 240, 240)    # Primary text
+COL_ACCENT  = (255, 60, 20)      # Vermillion red
+COL_ACCENT2 = (255, 220, 0)      # Yellow
+COL_MUTED   = (100, 100, 100)    # Secondary text
+COL_BLOCK   = (30, 30, 30)       # Panel backgrounds
+COL_SUCCESS = (0, 200, 80)       # Confirmation, QR
+COL_BORDER  = (240, 240, 240)    # Thick white borders
+COL_DANGER  = (180, 30, 20)      # Cancel / error
+
+L_WIDTH, L_HEIGHT = 320, 240
+BORDER_W = 3
+
+_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+_HAS_FONT = os.path.exists(_FONT_PATH)
+FONT_XL = ImageFont.truetype(_FONT_PATH, 26) if _HAS_FONT else ImageFont.load_default()
+FONT_LG = ImageFont.truetype(_FONT_PATH, 18) if _HAS_FONT else ImageFont.load_default()
+FONT_MD = ImageFont.truetype(_FONT_PATH, 14) if _HAS_FONT else ImageFont.load_default()
+FONT_SM = ImageFont.truetype(_FONT_PATH, 11) if _HAS_FONT else ImageFont.load_default()
+
+def _new_frame(bg=None):
+    img = Image.new('RGB', (L_WIDTH, L_HEIGHT), bg or COL_BG)
+    return img, ImageDraw.Draw(img)
+
+def _show(disp, image):
+    if disp:
+        disp.ShowImage(image.rotate(90, expand=True))
+
+def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
+    if fill: draw.rectangle(box, fill=fill)
+    draw.rectangle(box, outline=border_color or COL_BORDER, width=width)
+
+def _center_text(draw, y, text, font, fill=COL_FG, area_width=L_WIDTH):
+    w = draw.textlength(text, font=font)
+    draw.text(((area_width - w) / 2, y), text, font=font, fill=fill)
+
+# --- 1. LCD Configuration ---
+def find_lib_path():
+    for root_dir in ['.', 'lcd_assets', 'LCD_Module_code']:
+        if not os.path.exists(root_dir): continue
+        for config_name in ['lcdconfig.py', 'tp_config.py']:
+            search_pattern = os.path.join(os.getcwd(), root_dir, '**', config_name)
+            matches = glob.glob(search_pattern, recursive=True)
+            if matches:
+                lib_dir = os.path.dirname(matches[0])
+                if os.path.basename(lib_dir) == 'lib': return os.path.dirname(lib_dir)
+                return lib_dir
+    return None
+
+lib_path = find_lib_path()
+HAS_LCD = False
+if lib_path and os.path.exists(lib_path):
+    sys.path.append(lib_path)
+    try:
+        from lib import lcdconfig as config
+        try:
+            from lib import LCD_2inch4 as LCD
+        except ImportError:
+            from lib import LCD_2in4 as LCD
+        HAS_LCD = True
+    except ImportError:
+        pass
 
 # --- Barcode Cache ---
-
 class BarcodeCache:
     def __init__(self, cache_file="barcode_cache.json"):
         self.cache_file = cache_file
@@ -78,26 +146,19 @@ class BarcodeCache:
     def load(self):
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, "r") as f:
-                    self.cache = json.load(f)
-                print(f"DEBUG: Loaded {len(self.cache)} items from cache.")
-            except Exception as e:
-                print(f"DEBUG: Error loading cache: {e}")
+                with open(self.cache_file, "r") as f: self.cache = json.load(f)
+            except Exception:
                 self.cache = {}
 
     def save(self):
         try:
-            with open(self.cache_file, "w") as f:
-                json.dump(self.cache, f)
-        except Exception as e:
-            print(f"DEBUG: Error saving cache: {e}")
+            with open(self.cache_file, "w") as f: json.dump(self.cache, f)
+        except Exception: pass
 
-    def get(self, barcode):
-        return self.cache.get(barcode)
+    def get(self, barcode): return self.cache.get(barcode)
 
     def set(self, barcode, part_detail):
         if part_detail:
-            # Cache essential details for display and payment
             essential = {
                 "pk": part_detail.get("pk"),
                 "name": part_detail.get("name"),
@@ -116,37 +177,28 @@ class BarcodeCache:
 BARCODE_CACHE = BarcodeCache()
 
 # --- InvenTree API Functions ---
-
 def fetch_part_details(part_id):
     if not part_id: return None
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
     url = f"{INVENTREE_URL}/api/part/{part_id}/"
     try:
         response = requests.get(url, headers=headers, timeout=5, verify=False)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"DEBUG: Error fetching part {part_id}: {e}")
+        if response.status_code == 200: return response.json()
+    except Exception: pass
     return None
 
 def get_item_by_barcode(barcode):
     cached_part = BARCODE_CACHE.get(barcode)
-    if cached_part:
-        return cached_part
+    if cached_part: return cached_part
 
-    if not INVENTREE_TOKEN:
-        print("Error: INVENTREE_TOKEN not configured")
-        return None
-
+    if not INVENTREE_TOKEN: return None
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
     
-    # Attempt 1: Barcode API
     url = f"{INVENTREE_URL}/api/barcode/"
     try:
         response = requests.post(url, data={"barcode": barcode}, headers=headers, timeout=5, verify=False)
         if response.status_code == 200:
             res = response.json()
-            
             def extract_from_obj(obj):
                 if not isinstance(obj, dict): return None
                 instance = obj.get("instance")
@@ -159,25 +211,21 @@ def get_item_by_barcode(barcode):
                 s_obj = res["stockitem"]
                 stock_item_pk = s_obj.get("pk") or (s_obj.get("instance", {}).get("pk") if isinstance(s_obj.get("instance"), dict) else None)
                 part = extract_from_obj(s_obj)
-                if part and stock_item_pk:
-                    part["_stock_item_pk"] = stock_item_pk
+                if part and stock_item_pk: part["_stock_item_pk"] = stock_item_pk
             elif "part" in res:
                 p_obj = res["part"]
                 if isinstance(p_obj, dict):
                     if "instance" in p_obj: part = p_obj["instance"]
                     elif "name" in p_obj: part = p_obj
-                if not part:
-                    part = fetch_part_details(p_obj)
+                if not part: part = fetch_part_details(p_obj)
             
             if part:
                 if not part.get('_stock_item_pk'):
                     part['_stock_item_pk'] = find_stock_item_for_part(part.get('pk'))
                 BARCODE_CACHE.set(barcode, part)
                 return part
-    except Exception:
-        pass
+    except Exception: pass
 
-    # Attempt 2 & 3: Search Part by EXACT Barcode or IPN
     try:
         variants = list(dict.fromkeys([barcode, barcode.lower(), barcode.upper()]))
         for v in variants:
@@ -205,10 +253,8 @@ def get_item_by_barcode(barcode):
                             item['_stock_item_pk'] = find_stock_item_for_part(item.get('pk'))
                         BARCODE_CACHE.set(barcode, item)
                         return item
-    except Exception:
-        pass
+    except Exception: pass
 
-    # Attempt 4: Search StockItem by EXACT Barcode field
     try:
         url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}&part_detail=true"
         response = requests.get(url, headers=headers, timeout=5, verify=False)
@@ -223,8 +269,7 @@ def get_item_by_barcode(barcode):
                         part["_stock_item_pk"] = stock_item_pk
                         BARCODE_CACHE.set(barcode, part)
                         return part
-    except Exception:
-        pass
+    except Exception: pass
 
     return None
 
@@ -248,16 +293,34 @@ def format_price(price):
 def extract_category(part_detail):
     if not part_detail: return "uncategorized"
     cat_detail = part_detail.get('category_detail')
-    if isinstance(cat_detail, dict) and cat_detail.get('name'):
-        return cat_detail.get('name').lower()
+    if isinstance(cat_detail, dict) and cat_detail.get('name'): return cat_detail.get('name').lower()
     path = part_detail.get('category_path')
-    if path and isinstance(path, str):
-        return path.split('/')[-1].lower()
-    if isinstance(part_detail.get('category_name'), str):
-        return part_detail.get('category_name').lower()
+    if path and isinstance(path, str): return path.split('/')[-1].lower()
+    if isinstance(part_detail.get('category_name'), str): return part_detail.get('category_name').lower()
     return "uncategorized"
 
+def get_image(part_detail):
+    img_path = part_detail.get('thumbnail') or part_detail.get('image')
+    if not img_path: return None
 
+    os.makedirs("image_cache", exist_ok=True)
+    part_id = part_detail.get('pk', 'unknown')
+    ext = os.path.splitext(img_path)[1] or ".png"
+    local_filename = f"image_cache/part_{part_id}{ext}"
+
+    if os.path.exists(local_filename):
+        try: return Image.open(local_filename)
+        except Exception: pass
+
+    img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
+    try:
+        headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
+        response = requests.get(img_url, headers=headers, timeout=5, verify=False)
+        if response.status_code == 200:
+            with open(local_filename, "wb") as f: f.write(response.content)
+            return Image.open(BytesIO(response.content))
+    except Exception: pass
+    return None
 
 def find_stock_item_for_part(part_id):
     if not part_id: return None
@@ -271,26 +334,21 @@ def find_stock_item_for_part(part_id):
             if results:
                 results.sort(key=lambda x: float(x.get('quantity', 0)), reverse=True)
                 return results[0].get('pk')
-    except Exception:
-        pass
+    except Exception: pass
     return None
 
 def send_changelog_event(action, item_name, quantity, price=None):
-    if not TV_PRESENTATION_URL:
-        return
+    if not TV_PRESENTATION_URL: return
     def _send():
         try:
             payload = {"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)}
-            if price is not None:
-                payload["price"] = round(float(price), 2)
+            if price is not None: payload["price"] = round(float(price), 2)
             requests.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
-        except Exception:
-            pass
+        except Exception: pass
     threading.Thread(target=_send, daemon=True).start()
 
 def remove_stock_from_inventree(cart):
-    if not INVENTREE_TOKEN:
-        return False, "INVENTREE_TOKEN not configured"
+    if not INVENTREE_TOKEN: return False, "INVENTREE_TOKEN not configured"
 
     headers = {"Authorization": f"Token {INVENTREE_TOKEN}", "Content-Type": "application/json"}
     url = f"{INVENTREE_URL}/api/stock/remove/"
@@ -298,11 +356,9 @@ def remove_stock_from_inventree(cart):
     items_to_remove = []
     for part_detail, quantity in cart.items:
         stock_item_pk = part_detail.get('_stock_item_pk') or find_stock_item_for_part(part_detail.get('pk'))
-        if stock_item_pk:
-            items_to_remove.append({"pk": stock_item_pk, "quantity": float(quantity)})
+        if stock_item_pk: items_to_remove.append({"pk": stock_item_pk, "quantity": float(quantity)})
 
-    if not items_to_remove:
-        return False, "No stock items found to remove"
+    if not items_to_remove: return False, "No stock items found to remove"
 
     payload = {"items": items_to_remove, "notes": f"Purchased via Interface-stock ({HTL_NAME})"}
 
@@ -314,16 +370,12 @@ def remove_stock_from_inventree(cart):
                 total_price = unit_price * quantity if unit_price else None
                 send_changelog_event("checkout", part_detail.get("name", "Unknown"), quantity, total_price)
             return True, ""
-        else:
-            return False, f"API Error: {response.status_code}"
-    except Exception as e:
-        return False, f"Exception: {str(e)}"
+        else: return False, f"API Error: {response.status_code}"
+    except Exception as e: return False, f"Exception: {str(e)}"
 
 # --- Shopping Cart Management ---
-
 class ShoppingCart:
-    def __init__(self):
-        self.items = []
+    def __init__(self): self.items = []
 
     def add_item(self, part_detail):
         pk = part_detail.get('pk')
@@ -335,56 +387,187 @@ class ShoppingCart:
         self.items.append((part_detail, 1))
 
     def remove_last_item(self):
-        if not self.items:
-            return None
+        if not self.items: return None
         part, qty = self.items[-1]
-        if qty > 1:
-            self.items[-1] = (part, qty - 1)
-        else:
-            self.items.pop()
+        if qty > 1: self.items[-1] = (part, qty - 1)
+        else: self.items.pop()
         return part
         
-    def get_total(self):
-        total = 0.0
-        for part_detail, qty in self.items:
-            total += extract_price(part_detail) * qty
-        return total
-    
-    def get_categories(self):
-        categories = set()
-        for part_detail, _ in self.items:
-            categories.add(extract_category(part_detail))
-        return sorted(categories)
-    
+    def get_total(self): return sum(extract_price(p) * q for p, q in self.items)
+    def get_categories(self): return sorted(set(extract_category(p) for p, _ in self.items))
     def get_description(self):
-        categories = self.get_categories()
-        if not categories:
-            return f"{HTL_NAME} - Purchase"
-        return f"{HTL_NAME}: " + ",".join(categories)
-    
-    def clear(self):
-        self.items = []
-    
-    def is_empty(self):
-        return len(self.items) == 0
+        cats = self.get_categories()
+        return f"{HTL_NAME}: " + ",".join(cats) if cats else f"{HTL_NAME} - Purchase"
+    def clear(self): self.items = []
+    def is_empty(self): return len(self.items) == 0
 
-# --- Output Formatting ---
+# --- LCD / Output Formatting ---
+def show_message_screen(disp, title, message, color=None):
+    if not disp: return
+    image, draw = _new_frame()
+    accent = color or COL_ACCENT
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 50], fill=accent)
+    _center_text(draw, 14, title.upper(), FONT_LG, fill=COL_FG)
+    draw.rectangle([BORDER_W, 53, L_WIDTH - BORDER_W - 1, 55], fill=COL_BORDER)
+    
+    lines = textwrap.fill(message, width=28).split('\n')
+    y = 80
+    for line in lines:
+        _center_text(draw, y, line.upper(), FONT_MD, fill=COL_FG)
+        y += 22
+    _show(disp, image)
 
-def generate_epc_qr_text(amount, description):
+def show_warning_screen(disp, title, message):
+    show_message_screen(disp, title, message, color=COL_DANGER)
+
+def show_idle_screen(disp):
+    if not disp: return
+    image, draw = _new_frame()
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    _border_rect(draw, [20, 40, L_WIDTH - 21, L_HEIGHT - 60], fill=COL_BLOCK)
+    _center_text(draw, 65, "SCAN", FONT_XL, fill=COL_ACCENT)
+    draw.rectangle([50, 105, L_WIDTH - 50, 107], fill=COL_BORDER)
+    _center_text(draw, 120, "READY", FONT_LG, fill=COL_MUTED)
+    _center_text(draw, L_HEIGHT - 45, HTL_NAME[:30].upper(), FONT_SM, fill=COL_MUTED)
+    _show(disp, image)
+
+def show_item_on_lcd(disp, part_detail, cart):
+    if not disp: return
+    image, draw = _new_frame()
+    SPLIT_X = 205
+    _border_rect(draw, [0, 0, SPLIT_X - 1, L_HEIGHT - 1])
+
+    if part_detail:
+        name = part_detail.get('name', 'UNKNOWN')
+        price = extract_price(part_detail)
+        draw.rectangle([BORDER_W, BORDER_W, SPLIT_X - BORDER_W - 1, 32], fill=COL_ACCENT)
+        draw.text((8, 8), "SCANNED", font=FONT_LG, fill=COL_FG)
+        img = get_image(part_detail)
+        if img:
+            img.thumbnail((80, 80))
+            image.paste(img, (10, 42))
+        else:
+            _border_rect(draw, [10, 42, 90, 122], fill=COL_BLOCK)
+            draw.text((30, 72), "—", font=FONT_LG, fill=COL_MUTED)
+
+        lines = textwrap.wrap(name.upper(), width=16)
+        y_text = 44 if len(lines) > 1 else 50
+        for line in lines[:2]:
+            draw.text((100, y_text), line, font=FONT_MD, fill=COL_FG)
+            y_text += 18
+        draw.rectangle([BORDER_W, 130, SPLIT_X - BORDER_W - 1, 132], fill=COL_BORDER)
+        draw.text((10, 142), "PRICE", font=FONT_SM, fill=COL_MUTED)
+        draw.text((10, 158), format_price(price), font=FONT_XL, fill=COL_ACCENT)
+    else:
+        _center_text(draw, 70, "NOT", FONT_XL, fill=COL_ACCENT, area_width=SPLIT_X)
+        _center_text(draw, 105, "FOUND", FONT_XL, fill=COL_ACCENT, area_width=SPLIT_X)
+
+    _border_rect(draw, [SPLIT_X, 0, L_WIDTH - 1, L_HEIGHT - 1], fill=COL_BLOCK)
+    draw.rectangle([SPLIT_X + BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 28], fill=COL_BORDER)
+    draw.text((SPLIT_X + 10, 6), "CART", font=FONT_MD, fill=COL_BG)
+
+    if cart.is_empty():
+        draw.text((SPLIT_X + 20, 100), "EMPTY", font=FONT_SM, fill=COL_MUTED)
+    else:
+        y = 36
+        for part, qty in cart.items[:4]:
+            full_name = part.get('name', '?').upper()
+            draw.text((SPLIT_X + 6, y), f"{qty}×", font=FONT_SM, fill=COL_ACCENT)
+            lines = textwrap.wrap(full_name, width=12)
+            if lines:
+                draw.text((SPLIT_X + 6, y + 13), lines[0], font=FONT_SM, fill=COL_FG)
+                if len(lines) > 1:
+                    draw.text((SPLIT_X + 6, y + 25), lines[1], font=FONT_SM, fill=COL_FG)
+            y += 40
+        if len(cart.items) > 4:
+            draw.text((SPLIT_X + 6, y), f"+{len(cart.items)-4}", font=FONT_SM, fill=COL_MUTED)
+
+        draw.rectangle([SPLIT_X + BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_BG)
+        draw.rectangle([SPLIT_X, L_HEIGHT - 42, L_WIDTH - 1, L_HEIGHT - 42 + 2], fill=COL_BORDER)
+        draw.text((SPLIT_X + 6, L_HEIGHT - 36), format_price(cart.get_total()), font=FONT_LG, fill=COL_ACCENT2)
+    _show(disp, image)
+
+def show_confirmation_screen(disp, cart):
+    if not disp: return
+    image, draw = _new_frame()
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
+    _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
+    draw.rectangle([BORDER_W, 37, L_WIDTH - BORDER_W - 1, 39], fill=COL_BORDER)
+
+    y = 46
+    for part, qty in cart.items[:4]:
+        full_name = part.get('name', 'ITEM').upper()
+        price = extract_price(part) * qty
+        lines = textwrap.wrap(full_name, width=22)
+        draw.text((10, y), f"{qty}×  {lines[0]}", font=FONT_SM, fill=COL_FG)
+        price_str = format_price(price)
+        pw = draw.textlength(price_str, font=FONT_SM)
+        draw.text((L_WIDTH - pw - 10, y), price_str, font=FONT_SM, fill=COL_ACCENT)
+        if len(lines) > 1:
+            draw.text((42, y + 14), lines[1], font=FONT_SM, fill=COL_FG)
+            y += 30
+        else: y += 22
+
+    if len(cart.items) > 4:
+        draw.text((10, y), f"+ {len(cart.items) - 4} MORE...", font=FONT_SM, fill=COL_MUTED)
+
+    draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
+    draw.rectangle([BORDER_W, L_HEIGHT - 82, L_WIDTH - BORDER_W - 1, L_HEIGHT - 80], fill=COL_BORDER)
+    draw.text((10, L_HEIGHT - 78), "TOTAL", font=FONT_LG, fill=COL_FG)
+    total_str = format_price(cart.get_total())
+    tw = draw.textlength(total_str, font=FONT_XL)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL, fill=COL_ACCENT2)
+
+    _center_text(draw, L_HEIGHT - 55, "SCANNING CONFIRM WILL REMOVE FROM STOCK", FONT_SM, fill=COL_ACCENT)
+    draw.rectangle([BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
+    _center_text(draw, L_HEIGHT - 34, "SCAN CONFIRM TO FINALIZE", FONT_SM, fill=COL_FG)
+    _show(disp, image)
+
+def generate_wero_qr(amount, description):
     epc_data = [
         "BCD", "002", "1", "SCT", "",
         HTL_NAME, HTL_IBAN, f"EUR{amount:.2f}", "", "", description
     ]
-    return "\n".join(epc_data)
+    qr_content = "\n".join(epc_data)
+    qr = qrcode.QRCode(version=1, box_size=4, border=2)
+    qr.add_data(qr_content)
+    qr.make(fit=True)
+    return qr.make_image(fill_color="black", back_color="white")
 
-def render_terminal(state, cart, message=None, item_name=None, item_price=None):
-    # Clear terminal (optional, depending on preference, sticking to append for logs)
+def show_payment_qr(disp, cart):
+    if not disp: return
+    try:
+        image, draw = _new_frame()
+        _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 30], fill=COL_SUCCESS)
+        _center_text(draw, 6, "WERO PAYMENT", FONT_LG, fill=COL_BG)
+        draw.rectangle([BORDER_W, 33, L_WIDTH - BORDER_W - 1, 35], fill=COL_BORDER)
+
+        total = cart.get_total()
+        description = cart.get_description()
+        qr_img = generate_wero_qr(total, description)
+        qr_size = 150
+        qr_img = qr_img.resize((qr_size, qr_size))
+        qr_x = (L_WIDTH - qr_size) // 2
+        qr_y = 42
+        image.paste(qr_img, (qr_x, qr_y))
+        _border_rect(draw, [qr_x - 4, qr_y - 4, qr_x + qr_size + 3, qr_y + qr_size + 3])
+        _center_text(draw, 200, format_price(total), FONT_XL, fill=COL_ACCENT2)
+        cats = " / ".join(cart.get_categories())[:35].upper()
+        _center_text(draw, L_HEIGHT - 18, cats, FONT_SM, fill=COL_MUTED)
+        _show(disp, image)
+    except Exception as e:
+        show_warning_screen(disp, "QR ERROR", "Could not generate payment QR.")
+
+def render(disp, state, cart, message=None, item_name=None, item_price=None, last_part=None):
     print("\n" + "="*40)
-    
     if state == AppState.IDLE:
         print(f"--- {HTL_NAME} ---")
         if message: print(f"*** {message} ***")
         print("READY! Scan an item to begin.")
+        show_idle_screen(disp)
         
     elif state == AppState.SHOPPING:
         print("--- CART ---")
@@ -392,17 +575,27 @@ def render_terminal(state, cart, message=None, item_name=None, item_price=None):
         if item_name:
             print(f"Last Added: {item_name} ({format_price(item_price)})")
             print("-" * 20)
-        
         for part, qty in cart.items:
             print(f"{qty}x {part.get('name', 'Unknown')} - {format_price(extract_price(part) * qty)}")
         print(f"TOTAL: {format_price(cart.get_total())}")
         print("Commands: [CONFIRM] to checkout | [REMOVE] to undo | [CANCEL] to start over")
         
+        if message and "ERROR" in message.upper():
+            show_warning_screen(disp, "ERROR", message)
+            time.sleep(1.5)
+            show_item_on_lcd(disp, last_part, cart)
+        elif message and ("Removed" in message or "Aborted" in message):
+            show_message_screen(disp, "INFO", message, color=COL_DANGER)
+            time.sleep(1.0)
+            show_item_on_lcd(disp, last_part, cart)
+        else:
+            show_item_on_lcd(disp, last_part, cart)
+        
     elif state == AppState.CANCEL_CONFIRM:
         print("!!! CANCEL TRANSACTION !!!")
         print(f"Cart has {len(cart.items)} items.")
         print("Scan [CANCEL] again to clear cart.")
-        print("Scan any item to go back.")
+        show_warning_screen(disp, "CANCEL?", "Scan CANCEL again to stop transaction and clear cart")
         
     elif state == AppState.CHECKOUT_CONFIRM:
         print("--- CHECKOUT ---")
@@ -412,111 +605,87 @@ def render_terminal(state, cart, message=None, item_name=None, item_price=None):
         print("-" * 20)
         print(f"GRAND TOTAL: {format_price(cart.get_total())}")
         print("Scan [CONFIRM] again to finalize and remove stock.")
-        print("Scan [CANCEL] or [REMOVE] to go back.")
+        
+        if message and "Unknown Barcode" in message:
+            show_warning_screen(disp, "UNKNOWN", message)
+            time.sleep(1.5)
+        show_confirmation_screen(disp, cart)
         
     elif state == AppState.PROCESSING:
         print("Processing checkout...")
+        show_message_screen(disp, "PROCESSING", "Removing items from InvenTree stock...", color=COL_ACCENT2)
         
     elif state == AppState.QR_DISPLAY:
         print("--- PAYMENT SUCCESS ---")
         print("Stock successfully removed from InvenTree.")
         print(f"Total Due: {format_price(cart.get_total())}")
-        print(f"Description: {cart.get_description()}")
-        if HTL_IBAN:
-            print(f"IBAN: {HTL_IBAN}")
-        else:
-            print("WARNING: Payment IBAN not configured!")
         if message: print(f"\n{message}")
         print("\nScan [CONFIRM], [CANCEL], or [REMOVE] to start a new transaction.")
+        show_payment_qr(disp, cart)
 
     print("="*40)
 
 # --- Main App Logic ---
-
 def handle_barcode(state, barcode, cart):
-    """Returns (new_state, message, item_name, item_price)"""
+    """Returns (new_state, message, item_name, item_price, last_part)"""
     bc = barcode.upper()
     
-    # 1. IDLE STATE
     if state == AppState.IDLE:
         if bc in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE):
-            return AppState.IDLE, "Cart is empty.", None, None
-            
+            return AppState.IDLE, "Cart is empty.", None, None, None
         part = get_item_by_barcode(barcode)
         if part:
             cart.add_item(part)
-            return AppState.SHOPPING, None, part.get('name'), extract_price(part)
-        return AppState.IDLE, f"Unknown Barcode: {barcode}", None, None
+            return AppState.SHOPPING, None, part.get('name'), extract_price(part), part
+        return AppState.IDLE, f"Unknown Barcode: {barcode}", None, None, None
 
-    # 2. QR DISPLAY STATE (Locked, waiting for clear)
     if state == AppState.QR_DISPLAY:
         if bc in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE):
             cart.clear()
-            return AppState.IDLE, "Transaction Complete. Ready.", None, None
-        # Ignore normal item scans completely so they aren't added to old cart
-        return AppState.QR_DISPLAY, "Please finish payment. Scan CONFIRM to start new transaction.", None, None
+            return AppState.IDLE, "Transaction Complete. Ready.", None, None, None
+        return AppState.QR_DISPLAY, "Please finish payment. Scan CONFIRM to start new transaction.", None, None, None
 
-    # 3. SHOPPING STATE
     if state == AppState.SHOPPING:
-        if bc == CANCEL_BARCODE:
-            return AppState.CANCEL_CONFIRM, None, None, None
-            
-        elif bc == CONFIRM_BARCODE:
-            return AppState.CHECKOUT_CONFIRM, None, None, None
-            
+        if bc == CANCEL_BARCODE: return AppState.CANCEL_CONFIRM, None, None, None, None
+        elif bc == CONFIRM_BARCODE: return AppState.CHECKOUT_CONFIRM, None, None, None, None
         elif bc == REMOVE_BARCODE:
             removed = cart.remove_last_item()
-            if cart.is_empty():
-                return AppState.IDLE, "Cart is now empty.", None, None
+            if cart.is_empty(): return AppState.IDLE, "Cart is now empty.", None, None, None
             msg = f"Removed {removed.get('name')}" if removed else "Nothing to remove."
-            return AppState.SHOPPING, msg, None, None
-            
+            return AppState.SHOPPING, msg, None, None, None
         else:
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
-                return AppState.SHOPPING, None, part.get('name'), extract_price(part)
-            return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None
+                return AppState.SHOPPING, None, part.get('name'), extract_price(part), part
+            return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None, None
 
-    # 4. CANCEL CONFIRM STATE
     if state == AppState.CANCEL_CONFIRM:
         if bc == CANCEL_BARCODE:
             cart.clear()
-            return AppState.IDLE, "Transaction cancelled.", None, None
+            return AppState.IDLE, "Transaction cancelled.", None, None, None
         elif bc in (CONFIRM_BARCODE, REMOVE_BARCODE):
-            return AppState.SHOPPING, "Cancellation aborted.", None, None
+            return AppState.SHOPPING, "Cancellation aborted.", None, None, None
         else:
-            # Treat item scan as "abort cancel, add item"
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
-                return AppState.SHOPPING, "Cancellation aborted.", part.get('name'), extract_price(part)
-            return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None
+                return AppState.SHOPPING, "Cancellation aborted.", part.get('name'), extract_price(part), part
+            return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None, None
 
-    # 5. CHECKOUT CONFIRM STATE
     if state == AppState.CHECKOUT_CONFIRM:
         if bc == CONFIRM_BARCODE:
-            # Execute checkout
-            render_terminal(AppState.PROCESSING, cart)
-            success, err_msg = remove_stock_from_inventree(cart)
-            if success:
-                qr_text = generate_epc_qr_text(cart.get_total(), cart.get_description())
-                # Just store qr text in message for display
-                return AppState.QR_DISPLAY, "QR Code Data:\n" + qr_text, None, None
-            else:
-                return AppState.SHOPPING, f"Checkout Failed: {err_msg}", None, None
-                
+            return AppState.PROCESSING, None, None, None, None
         elif bc in (CANCEL_BARCODE, REMOVE_BARCODE):
-            return AppState.SHOPPING, "Checkout aborted.", None, None
-            
+            return AppState.SHOPPING, "Checkout aborted.", None, None, None
         else:
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
-                return AppState.SHOPPING, "Added item. Please confirm checkout again.", part.get('name'), extract_price(part)
-            return AppState.CHECKOUT_CONFIRM, f"Unknown Barcode: {barcode}", None, None
+                return AppState.SHOPPING, "Added item. Please confirm checkout again.", part.get('name'), extract_price(part), part
+            return AppState.CHECKOUT_CONFIRM, f"Unknown Barcode: {barcode}", None, None, None
 
-    return state, "Unexpected State", None, None
+    return state, "Unexpected State", None, None, None
 
 def find_scanner():
     if not HAS_EVDEV: return None
@@ -535,91 +704,96 @@ def read_scancode(device):
     try:
         while True:
             r, w, x = select.select([device], [], [], 1.0)
-            if not r:
-                return "" # Timeout, let main loop check things
-            
+            if not r: return ""
             for event in device.read():
                 if event.type == ecodes.EV_KEY:
                     data = evdev.categorize(event)
-                    if data.keystate == 1: # Key Down
+                    if data.keystate == 1:
                         if data.scancode == ecodes.KEY_ENTER:
                             res = barcode.strip()
                             barcode = ""
                             if res: return res
                         else:
                             char = SCAN_CODES.get(data.scancode)
-                            if char is not None:
-                                barcode += char
-    except Exception as e:
-        print(f"Scanner read error: {e}")
-        return None # Indicate device failure
+                            if char is not None: barcode += char
+    except Exception as e: return None
 
 def main():
+    disp = None
+    if HAS_LCD:
+        try:
+            if hasattr(LCD, 'LCD_2inch4'): disp = LCD.LCD_2inch4()
+            else: disp = LCD.LCD_2in4()
+            disp.Init()
+            disp.clear()
+        except: disp = None
+
     scanner = find_scanner()
     print("\n--- InvenTree Shopping System (Terminal Mode) ---")
     print(f"Makerspace: {HTL_NAME}")
-    if scanner: print(f"Hardware Scanner: {scanner.name}")
-    else: print("Mode: Terminal Input")
     
     cart = ShoppingCart()
     state = AppState.IDLE
     last_interaction = time.time()
     last_scan_time = 0
-    TIMEOUT_SECONDS = 300 # 5 minutes for general timeout
+    TIMEOUT_SECONDS = 300
+    last_part = None
     
-    render_terminal(state, cart)
+    render(disp, state, cart)
     
     try:
         while True:
-            # 1. Timeout Check
-            # We enforce timeout in any state except IDLE and QR_DISPLAY
             if state not in (AppState.IDLE, AppState.QR_DISPLAY):
                 if time.time() - last_interaction > TIMEOUT_SECONDS:
-                    print("\nInactivity timeout. Clearing cart.")
                     cart.clear()
                     state = AppState.IDLE
-                    render_terminal(state, cart, "Timeout: Cart Cleared")
+                    last_part = None
+                    render(disp, state, cart, "Timeout: Cart Cleared")
                     last_interaction = time.time()
 
-            # 2. Get Input
             if scanner:
                 barcode = read_scancode(scanner)
                 if barcode is None:
-                    # Scanner disconnected or error. Try to reconnect.
-                    print("Scanner lost. Attempting to reconnect...")
                     time.sleep(2)
                     scanner = find_scanner()
-                    if scanner:
-                        print(f"Reconnected to {scanner.name}")
                     continue
             else:
                 try:
                     raw = input("Scan: ").strip()
                     barcode = decode_manual_input(raw) if raw else ""
-                except EOFError:
-                    break
+                except EOFError: break
 
-            if not barcode:
-                continue
+            if not barcode: continue
 
-            # 3. Debounce
             current_time = time.time()
-            if (current_time - last_scan_time) < 0.2:
-                continue
+            if (current_time - last_scan_time) < 0.2: continue
                 
             last_interaction = current_time
             last_scan_time = current_time
-            print(f"Scanned: {barcode}")
             
-            # 4. State Transition
-            new_state, msg, item_name, item_price = handle_barcode(state, barcode, cart)
+            new_state, msg, item_name, item_price, scanned_part = handle_barcode(state, barcode, cart)
+            
+            # Special fast-path for CHECKOUT_CONFIRM -> PROCESSING -> QR_DISPLAY
+            if new_state == AppState.PROCESSING:
+                render(disp, AppState.PROCESSING, cart)
+                success, err_msg = remove_stock_from_inventree(cart)
+                if success:
+                    new_state = AppState.QR_DISPLAY
+                    msg = "Stock removed!"
+                else:
+                    new_state = AppState.SHOPPING
+                    msg = f"Checkout Failed: {err_msg}"
+            
             state = new_state
+            if scanned_part: last_part = scanned_part
             
-            # 5. Render
-            render_terminal(state, cart, msg, item_name, item_price)
+            render(disp, state, cart, msg, item_name, item_price, last_part)
 
     except KeyboardInterrupt:
         print("\nExiting...")
+    finally:
+        if HAS_LCD and 'config' in globals() and hasattr(config, 'module_exit'):
+            config.module_exit()
 
 if __name__ == "__main__":
     main()

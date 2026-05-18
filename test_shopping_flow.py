@@ -79,14 +79,14 @@ def test_shopping_cart():
     print("\n✓ All tests passed!")
 
 def test_qr_generation():
-    """Test QR code text generation"""
-    from barcode_inventree import generate_epc_qr_text
+    """Test QR code generation"""
+    from barcode_inventree import generate_wero_qr
     
-    print("\nTesting EPC QR generation...")
+    print("\nTesting Wero QR generation...")
     try:
-        qr_text = generate_epc_qr_text(25.50, "HTL Makerspace - drink - wood")
-        print(f"   QR text generated successfully:")
-        print(f"   {qr_text.splitlines()[:2]} ...")
+        qr_img = generate_wero_qr(25.50, "HTL Makerspace - drink - wood")
+        print(f"   QR code generated successfully")
+        print(f"   Size: {qr_img.size}")
         print("✓ QR generation test passed!")
     except Exception as e:
         print(f"✗ QR generation failed: {e}")
