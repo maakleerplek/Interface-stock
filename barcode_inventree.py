@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import requests
+import threading
 from enum import Enum
 from dotenv import load_dotenv
 
@@ -169,6 +170,8 @@ def get_item_by_barcode(barcode):
                     part = fetch_part_details(p_obj)
             
             if part:
+                if not part.get('_stock_item_pk'):
+                    part['_stock_item_pk'] = find_stock_item_for_part(part.get('pk'))
                 BARCODE_CACHE.set(barcode, part)
                 return part
     except Exception:
@@ -185,6 +188,8 @@ def get_item_by_barcode(barcode):
                 results = items if isinstance(items, list) else items.get("results", [])
                 for item in results:
                     if item.get("barcode", "").lower() == v.lower() or item.get("IPN", "").lower() == v.lower():
+                        if not item.get('_stock_item_pk'):
+                            item['_stock_item_pk'] = find_stock_item_for_part(item.get('pk'))
                         BARCODE_CACHE.set(barcode, item)
                         return item
 
@@ -196,6 +201,8 @@ def get_item_by_barcode(barcode):
                 results = items if isinstance(items, list) else items.get("results", [])
                 for item in results:
                     if item.get("IPN", "").lower() == v.lower():
+                        if not item.get('_stock_item_pk'):
+                            item['_stock_item_pk'] = find_stock_item_for_part(item.get('pk'))
                         BARCODE_CACHE.set(barcode, item)
                         return item
     except Exception:
@@ -250,14 +257,7 @@ def extract_category(part_detail):
         return part_detail.get('category_name').lower()
     return "uncategorized"
 
-def check_inventree_connection():
-    if not INVENTREE_URL: return False
-    try:
-        url = f"{INVENTREE_URL}/api/"
-        response = requests.get(url, timeout=3, verify=False)
-        return response.status_code == 200
-    except:
-        return False
+
 
 def find_stock_item_for_part(part_id):
     if not part_id: return None
@@ -278,13 +278,15 @@ def find_stock_item_for_part(part_id):
 def send_changelog_event(action, item_name, quantity, price=None):
     if not TV_PRESENTATION_URL:
         return
-    try:
-        payload = {"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)}
-        if price is not None:
-            payload["price"] = round(float(price), 2)
-        requests.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
-    except Exception:
-        pass
+    def _send():
+        try:
+            payload = {"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)}
+            if price is not None:
+                payload["price"] = round(float(price), 2)
+            requests.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
 
 def remove_stock_from_inventree(cart):
     if not INVENTREE_TOKEN:
@@ -460,8 +462,6 @@ def handle_barcode(state, barcode, cart):
             return AppState.CANCEL_CONFIRM, None, None, None
             
         elif bc == CONFIRM_BARCODE:
-            if not check_inventree_connection():
-                return AppState.SHOPPING, "ERROR: InvenTree offline. Cannot checkout.", None, None
             return AppState.CHECKOUT_CONFIRM, None, None, None
             
         elif bc == REMOVE_BARCODE:
