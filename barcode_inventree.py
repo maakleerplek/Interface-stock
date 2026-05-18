@@ -688,7 +688,7 @@ def show_confirmation_screen(disp, cart):
 
     # Item list
     y = 46
-    for part, qty in cart.items[:5]:
+    for part, qty in cart.items[:4]:
         full_name = part.get('name', 'ITEM').upper()
         price = extract_price(part) * qty
 
@@ -708,8 +708,8 @@ def show_confirmation_screen(disp, cart):
         else:
             y += 22
 
-    if len(cart.items) > 5:
-        draw.text((10, y), f"+ {len(cart.items) - 5} MORE...", font=FONT_SM, fill=COL_MUTED)
+    if len(cart.items) > 4:
+        draw.text((10, y), f"+ {len(cart.items) - 4} MORE...", font=FONT_SM, fill=COL_MUTED)
 
     # Total block at bottom
     draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
@@ -774,39 +774,44 @@ def generate_wero_qr(amount, description):
 
 def show_payment_qr(disp, cart):
     """Payment QR — brutalist framed QR code."""
-    image, draw = _new_frame()
+    try:
+        image, draw = _new_frame()
 
-    # Outer border
-    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+        # Outer border
+        _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
 
-    # Header block
-    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 30], fill=COL_SUCCESS)
-    _center_text(draw, 6, "WERO PAYMENT", FONT_LG, fill=COL_BG)
+        # Header block
+        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 30], fill=COL_SUCCESS)
+        _center_text(draw, 6, "WERO PAYMENT", FONT_LG, fill=COL_BG)
 
-    # Separator
-    draw.rectangle([BORDER_W, 33, L_WIDTH - BORDER_W - 1, 35], fill=COL_BORDER)
+        # Separator
+        draw.rectangle([BORDER_W, 33, L_WIDTH - BORDER_W - 1, 35], fill=COL_BORDER)
 
-    # Generate and display QR code
-    total = cart.get_total()
-    description = cart.get_description()
-    qr_img = generate_wero_qr(total, description)
+        # Generate and display QR code
+        total = cart.get_total()
+        description = cart.get_description()
+        qr_img = generate_wero_qr(total, description)
 
-    # QR in a bordered box
-    qr_size = 150
-    qr_img = qr_img.resize((qr_size, qr_size))
-    qr_x = (L_WIDTH - qr_size) // 2
-    qr_y = 42
-    image.paste(qr_img, (qr_x, qr_y))
-    _border_rect(draw, [qr_x - 4, qr_y - 4, qr_x + qr_size + 3, qr_y + qr_size + 3])
+        # QR in a bordered box
+        qr_size = 150
+        qr_img = qr_img.resize((qr_size, qr_size))
+        qr_x = (L_WIDTH - qr_size) // 2
+        qr_y = 42
+        image.paste(qr_img, (qr_x, qr_y))
+        _border_rect(draw, [qr_x - 4, qr_y - 4, qr_x + qr_size + 3, qr_y + qr_size + 3])
 
-    # Amount — large, below QR
-    _center_text(draw, 200, format_price(total), FONT_XL, fill=COL_ACCENT2)
+        # Amount — large, below QR
+        _center_text(draw, 200, format_price(total), FONT_XL, fill=COL_ACCENT2)
 
-    # Categories at very bottom
-    cats = " / ".join(cart.get_categories())[:35].upper()
-    _center_text(draw, L_HEIGHT - 18, cats, FONT_SM, fill=COL_MUTED)
+        # Categories at very bottom
+        cats = " / ".join(cart.get_categories())[:35].upper()
+        _center_text(draw, L_HEIGHT - 18, cats, FONT_SM, fill=COL_MUTED)
 
-    _show(disp, image)
+        _show(disp, image)
+    except Exception as e:
+        print(f"ERROR: Payment QR display failed: {e}")
+        show_warning_screen(disp, "QR ERROR", "Could not generate payment QR.")
+    
     if not HAS_LCD:
         print("\n" + "="*40)
         print("WERO PAYMENT QR CODE")
