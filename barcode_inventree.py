@@ -43,7 +43,8 @@ if INVENTREE_TOKEN:
     API_SESSION.headers.update({"Authorization": f"Token {INVENTREE_TOKEN}"})
 API_SESSION.verify = False  # Ignore self-signed cert warnings
 
-# Background LCD rendering queue
+# Background LCD rendering queue - maxsize=1 so we always render the LATEST frame
+# We drain it before pushing so stale frames never block responsiveness
 LCD_QUEUE = queue.Queue()
 
 # Special barcodes for checkout confirmation and cancellation
@@ -186,6 +187,10 @@ class BarcodeCache:
 
 BARCODE_CACHE = BarcodeCache()
 
+# In-memory cache of already-resized 80×80 thumbnails keyed by part pk.
+# Avoids repeated Pillow thumbnail() calls on every LCD refresh — important on Pi 3.
+_THUMBNAIL_CACHE: dict = {}
+
 # --- InvenTree API Functions ---
 def fetch_part_details(part_id):
     if not part_id: return None
@@ -307,27 +312,43 @@ def extract_category(part_detail):
     if isinstance(part_detail.get('category_name'), str): return part_detail.get('category_name').lower()
     return "uncategorized"
 
-def get_image(part_detail):
+def get_image(part_detail, size=(80, 80)):
     img_path = part_detail.get('thumbnail') or part_detail.get('image')
     if not img_path: return None
 
-    os.makedirs("image_cache", exist_ok=True)
     part_id = part_detail.get('pk', 'unknown')
+    cache_key = (part_id, size)
+
+    # Return already-resized image from RAM — free on Pi 3
+    if cache_key in _THUMBNAIL_CACHE:
+        return _THUMBNAIL_CACHE[cache_key]
+
+    os.makedirs("image_cache", exist_ok=True)
     ext = os.path.splitext(img_path)[1] or ".png"
     local_filename = f"image_cache/part_{part_id}{ext}"
 
+    img = None
     if os.path.exists(local_filename):
-        try: return Image.open(local_filename)
+        try: img = Image.open(local_filename)
         except Exception: pass
 
-    img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
-    try:
-        response = API_SESSION.get(img_url, timeout=5)
-        if response.status_code == 200:
-            with open(local_filename, "wb") as f: f.write(response.content)
-            return Image.open(BytesIO(response.content))
-    except Exception: pass
-    return None
+    if img is None:
+        img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
+        try:
+            response = API_SESSION.get(img_url, timeout=5)
+            if response.status_code == 200:
+                with open(local_filename, "wb") as f: f.write(response.content)
+                img = Image.open(BytesIO(response.content))
+        except Exception: pass
+
+    if img is None: return None
+
+    img.thumbnail(size)
+    # Cap cache at 64 entries to avoid unbounded RAM on Pi 3
+    if len(_THUMBNAIL_CACHE) >= 64:
+        _THUMBNAIL_CACHE.pop(next(iter(_THUMBNAIL_CACHE)))
+    _THUMBNAIL_CACHE[cache_key] = img
+    return img
 
 def find_stock_item_for_part(part_id):
     if not part_id: return None
@@ -461,9 +482,8 @@ def show_item_on_lcd(disp, part_detail, cart):
         price = extract_price(part_detail)
         draw.rectangle([BORDER_W, BORDER_W, SPLIT_X - BORDER_W - 1, 32], fill=COL_ACCENT)
         draw.text((8, 8), "SCANNED", font=FONT_LG, fill=COL_FG)
-        img = get_image(part_detail)
+        img = get_image(part_detail, size=(80, 80))  # returns cached thumbnail
         if img:
-            img.thumbnail((80, 80))
             image.paste(img, (10, 42))
         else:
             _border_rect(draw, [10, 42, 90, 122], fill=COL_BLOCK)
@@ -586,25 +606,46 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
     elif state == AppState.SHOPPING:
         if message and "ERROR" in message.upper():
             show_warning_screen(disp, "ERROR", message)
-            time.sleep(1.5)
-            show_item_on_lcd(disp, last_part, cart)
+            # Don't block the worker with sleep — schedule the follow-up render
+            def _delayed_cart_view(d, c, p):
+                time.sleep(1.4)
+                LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
+                               None, None, None, p))
+            threading.Thread(target=_delayed_cart_view, args=(disp, cart, last_part), daemon=True).start()
         elif message and ("Removed" in message or "Aborted" in message):
             show_message_screen(disp, "INFO", message, color=COL_DANGER)
-            time.sleep(1.0)
-            show_item_on_lcd(disp, last_part, cart)
+            def _delayed_cart_view(d, c, p):
+                time.sleep(0.9)
+                LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
+                               None, None, None, p))
+            threading.Thread(target=_delayed_cart_view, args=(disp, cart, last_part), daemon=True).start()
         else:
             show_item_on_lcd(disp, last_part, cart)
     elif state == AppState.CANCEL_CONFIRM:
-        show_warning_screen(disp, "CANCEL?", "Scan CANCEL again to stop transaction and clear cart")
+        show_warning_screen(disp, "CANCEL?",
+                            "Scan CANCEL again to discard cart. Scan anything else to resume.")
     elif state == AppState.CHECKOUT_CONFIRM:
         if message and "Unknown Barcode" in message:
             show_warning_screen(disp, "UNKNOWN", message)
-            time.sleep(1.5)
-        show_confirmation_screen(disp, cart)
+            def _delayed_confirm(d, c):
+                time.sleep(1.4)
+                LCD_QUEUE.put((d, AppState.CHECKOUT_CONFIRM, c, None, None, None, None))
+            threading.Thread(target=_delayed_confirm, args=(disp, cart), daemon=True).start()
+        else:
+            show_confirmation_screen(disp, cart)
     elif state == AppState.PROCESSING:
         show_message_screen(disp, "PROCESSING", "Removing items from InvenTree stock...", color=COL_ACCENT2)
     elif state == AppState.QR_DISPLAY:
         show_payment_qr(disp, cart)
+
+def _drain_lcd_queue():
+    """Discard all pending LCD render tasks so only the latest is shown."""
+    while not LCD_QUEUE.empty():
+        try:
+            LCD_QUEUE.get_nowait()
+            LCD_QUEUE.task_done()
+        except queue.Empty:
+            break
 
 def lcd_worker():
     while True:
@@ -634,12 +675,12 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
         for part, qty in cart.items:
             print(f"{qty}x {part.get('name', 'Unknown')} - {format_price(extract_price(part) * qty)}")
         print(f"TOTAL: {format_price(cart.get_total())}")
-        print("Commands: [CONFIRM] to checkout | [REMOVE] to undo | [CANCEL] to start over")
+        print("Commands: [CONFIRM] to checkout | [REMOVE] to undo | [CANCEL] to confirm cancel")
         
     elif state == AppState.CANCEL_CONFIRM:
         print("!!! CANCEL TRANSACTION !!!")
-        print(f"Cart has {len(cart.items)} items.")
-        print("Scan [CANCEL] again to clear cart.")
+        print(f"Cart has {len(cart.items)} item(s).")
+        print("Scan [CANCEL] again to discard cart, or scan anything else to resume.")
         
     elif state == AppState.CHECKOUT_CONFIRM:
         print("--- CHECKOUT ---")
@@ -648,7 +689,7 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
             print(f"{qty}x {part.get('name', 'Unknown')}")
         print("-" * 20)
         print(f"GRAND TOTAL: {format_price(cart.get_total())}")
-        print("Scan [CONFIRM] again to finalize and remove stock.")
+        print("Scan [CONFIRM] to finalize | [CANCEL] to confirm cancel | [REMOVE] to go back.")
         
     elif state == AppState.PROCESSING:
         print("Processing checkout...")
@@ -664,6 +705,8 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
     
     if disp:
         cart_snap = CartSnapshot(cart)
+        # Drain stale frames so only the latest render hits the display
+        _drain_lcd_queue()
         LCD_QUEUE.put((disp, state, cart_snap, message, item_name, item_price, last_part))
 
 # --- Main App Logic ---
@@ -706,24 +749,28 @@ def handle_barcode(state, barcode, cart):
             cart.clear()
             return AppState.IDLE, "Transaction cancelled.", None, None, None
         elif bc in (CONFIRM_BARCODE, REMOVE_BARCODE):
-            return AppState.SHOPPING, "Cancellation aborted.", None, None, None
+            return AppState.SHOPPING, "Cancellation aborted. Cart unchanged.", None, None, None
         else:
+            # Any product scan also resumes shopping
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
                 return AppState.SHOPPING, "Cancellation aborted.", part.get('name'), extract_price(part), part
-            return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None, None
+            return AppState.SHOPPING, "Cancellation aborted. Cart unchanged.", None, None, None
 
     if state == AppState.CHECKOUT_CONFIRM:
         if bc == CONFIRM_BARCODE:
             return AppState.PROCESSING, None, None, None, None
-        elif bc in (CANCEL_BARCODE, REMOVE_BARCODE):
-            return AppState.SHOPPING, "Checkout aborted.", None, None, None
+        elif bc == CANCEL_BARCODE:
+            # Require confirmation before discarding a cart that was ready for checkout
+            return AppState.CANCEL_CONFIRM, None, None, None, None
+        elif bc == REMOVE_BARCODE:
+            return AppState.SHOPPING, "Checkout aborted. Continue scanning.", None, None, None
         else:
             part = get_item_by_barcode(barcode)
             if part:
                 cart.add_item(part)
-                return AppState.SHOPPING, "Added item. Please confirm checkout again.", part.get('name'), extract_price(part), part
+                return AppState.SHOPPING, "Item added. Re-scan CONFIRM when ready.", part.get('name'), extract_price(part), part
             return AppState.CHECKOUT_CONFIRM, f"Unknown Barcode: {barcode}", None, None, None
 
     return state, "Unexpected State", None, None, None
@@ -741,15 +788,21 @@ def find_scanner():
 import select
 
 def read_scancode(device):
+    """Read one complete barcode from the evdev device.
+    Uses a short 50 ms poll interval so the main loop stays responsive
+    (timeout check, etc.) without busy-waiting.
+    """
     barcode = ""
     try:
         while True:
-            r, w, x = select.select([device], [], [], 1.0)
-            if not r: return ""
+            r, _, _ = select.select([device], [], [], 0.05)  # 50 ms poll
+            if not r:
+                # Nothing ready — return empty so the caller can do housekeeping
+                return ""
             for event in device.read():
                 if event.type == ecodes.EV_KEY:
                     data = evdev.categorize(event)
-                    if data.keystate == 1:
+                    if data.keystate == 1:  # key-down only
                         if data.scancode == ecodes.KEY_ENTER:
                             res = barcode.strip()
                             barcode = ""
@@ -757,7 +810,8 @@ def read_scancode(device):
                         else:
                             char = SCAN_CODES.get(data.scancode)
                             if char is not None: barcode += char
-    except Exception as e: return None
+    except Exception:
+        return None
 
 def main():
     disp = None
@@ -795,6 +849,7 @@ def main():
             if scanner:
                 barcode = read_scancode(scanner)
                 if barcode is None:
+                    # Device disconnected — wait then try to reconnect
                     time.sleep(2)
                     scanner = find_scanner()
                     continue
@@ -807,11 +862,25 @@ def main():
             if not barcode: continue
 
             current_time = time.time()
-            if (current_time - last_scan_time) < 0.2: continue
+            if (current_time - last_scan_time) < 0.15: continue  # debounce
                 
             last_interaction = current_time
             last_scan_time = current_time
-            
+
+            bc_upper = barcode.upper()
+            is_command = bc_upper in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE)
+
+            # Show immediate "SEARCHING" feedback on LCD while the API call happens,
+            # but only for product scans (not commands which are handled instantly).
+            if disp and not is_command:
+                _drain_lcd_queue()
+                _searching_img, _searching_draw = _new_frame()
+                _border_rect(_searching_draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+                _searching_draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT)
+                _center_text(_searching_draw, 8, "SEARCHING...", FONT_LG, fill=COL_FG)
+                _center_text(_searching_draw, 100, barcode[:20].upper(), FONT_MD, fill=COL_MUTED)
+                _show(disp, _searching_img)
+
             new_state, msg, item_name, item_price, scanned_part = handle_barcode(state, barcode, cart)
             
             # Special fast-path for CHECKOUT_CONFIRM -> PROCESSING -> QR_DISPLAY
