@@ -28,6 +28,9 @@ HTL_CODE = os.getenv("HTL_CODE", "HTL001")
 HTL_IBAN = os.getenv("VITE_PAYMENT_IBAN") or os.getenv("HTL_IBAN", "")
 TV_PRESENTATION_URL = os.getenv("TV_PRESENTATION_URL", "")
 
+print(f"DEBUG: Startup - URL: {INVENTREE_URL}")
+print(f"DEBUG: Startup - Token: {'SET' if INVENTREE_TOKEN else 'MISSING'}")
+
 # Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
 CANCEL_BARCODE = "CANCEL"
