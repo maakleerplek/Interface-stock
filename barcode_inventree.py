@@ -618,13 +618,11 @@ def show_item_on_lcd(disp, part_detail, cart):
             draw.text((30, 72), "—", font=FONT_LG, fill=COL_MUTED)
 
         # Item name (right of image)
-        display_name = name[:16].upper()
-        if len(name) > 16:
-            draw.text((100, 44), display_name, font=FONT_MD, fill=COL_FG)
-            line2 = name[16:32].upper()
-            draw.text((100, 62), line2, font=FONT_MD, fill=COL_FG)
-        else:
-            draw.text((100, 50), display_name, font=FONT_MD, fill=COL_FG)
+        lines = textwrap.wrap(name.upper(), width=16)
+        y_text = 44 if len(lines) > 1 else 50
+        for line in lines[:2]:
+            draw.text((100, y_text), line, font=FONT_MD, fill=COL_FG)
+            y_text += 18
 
         # Separator
         draw.rectangle([BORDER_W, 130, SPLIT_X - BORDER_W - 1, 132], fill=COL_BORDER)
