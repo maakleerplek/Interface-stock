@@ -1,8 +1,8 @@
 [Unit]
-Description=Turn TV off daily at 12:00
+Description=Turn TV off daily at 00:00
 
 [Timer]
-OnCalendar=*-*-* 12:00:00
+OnCalendar=*-*-* 00:00:00
 Persistent=true
 
 [Install]
