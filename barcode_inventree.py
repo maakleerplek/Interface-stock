@@ -3,12 +3,14 @@ import sys
 import time
 import json
 import glob
+import atexit
 import textwrap
 import requests
 import threading
 import qrcode
 import queue
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image, ImageDraw, ImageFont
 from enum import Enum
 from dotenv import load_dotenv
@@ -37,11 +39,23 @@ print(f"DEBUG: Startup - Token: {'SET' if INVENTREE_TOKEN else 'MISSING'}")
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Create a persistent session for all InvenTree requests to reuse TLS connections
+# Persistent session with a connection pool — avoids TLS re-handshake on every request.
+# On Pi 3, a full TLS handshake to a self-signed server costs ~300-500 ms.
+from requests.adapters import HTTPAdapter
+_adapter = HTTPAdapter(
+    pool_connections=1,   # one host
+    pool_maxsize=4,       # up to 4 parallel requests share the same connection
+    max_retries=0,
+)
 API_SESSION = requests.Session()
 if INVENTREE_TOKEN:
-    API_SESSION.headers.update({"Authorization": f"Token {INVENTREE_TOKEN}"})
+    API_SESSION.headers.update({
+        "Authorization": f"Token {INVENTREE_TOKEN}",
+        "Connection": "keep-alive",
+    })
 API_SESSION.verify = False  # Ignore self-signed cert warnings
+API_SESSION.mount("https://", _adapter)
+API_SESSION.mount("http://", _adapter)
 
 # Background LCD rendering queue - maxsize=1 so we always render the LATEST frame
 # We drain it before pushing so stale frames never block responsiveness
@@ -149,22 +163,47 @@ if lib_path and os.path.exists(lib_path):
 
 # --- Barcode Cache ---
 class BarcodeCache:
+    """Disk-backed barcode→part_detail cache with debounced SD writes.
+
+    Writing to the SD card on every scan is slow and wears the card.
+    Instead we mark the cache dirty and flush at most every 10 seconds,
+    or immediately on process exit via atexit.
+    """
+    _DEBOUNCE_S = 10  # minimum seconds between disk writes
+
     def __init__(self, cache_file="barcode_cache.json"):
         self.cache_file = cache_file
         self.cache = {}
+        self._dirty = False
+        self._last_save = 0.0
+        self._lock = threading.Lock()
         self.load()
+        atexit.register(self.flush)  # always flush on clean exit
 
     def load(self):
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, "r") as f: self.cache = json.load(f)
+                with open(self.cache_file, "r") as f:
+                    self.cache = json.load(f)
             except Exception:
                 self.cache = {}
 
+    def flush(self):
+        """Write to disk immediately (called at exit or when debounce expires)."""
+        with self._lock:
+            if not self._dirty: return
+            try:
+                with open(self.cache_file, "w") as f:
+                    json.dump(self.cache, f)
+                self._dirty = False
+                self._last_save = time.time()
+            except Exception: pass
+
     def save(self):
-        try:
-            with open(self.cache_file, "w") as f: json.dump(self.cache, f)
-        except Exception: pass
+        """Debounced save — flushes only if debounce period has passed."""
+        self._dirty = True
+        if time.time() - self._last_save >= self._DEBOUNCE_S:
+            self.flush()
 
     def get(self, barcode): return self.cache.get(barcode)
 
@@ -239,50 +278,63 @@ def get_item_by_barcode(barcode):
                 return part
     except Exception: pass
 
-    try:
-        variants = list(dict.fromkeys([barcode, barcode.lower(), barcode.upper()]))
-        for v in variants:
-            url = f"{INVENTREE_URL}/api/part/?barcode={v}&category_detail=true"
-            response = API_SESSION.get(url, timeout=5)
-            if response.status_code == 200:
-                items = response.json()
-                results = items if isinstance(items, list) else items.get("results", [])
-                for item in results:
-                    if item.get("barcode", "").lower() == v.lower() or item.get("IPN", "").lower() == v.lower():
-                        if not item.get('_stock_item_pk'):
-                            item['_stock_item_pk'] = find_stock_item_for_part(item.get('pk'))
-                        BARCODE_CACHE.set(barcode, item)
-                        return item
+    # --- Parallel fallback lookups ---
+    # Fire all fallback endpoints simultaneously so the worst-case miss time is
+    # one round-trip instead of four. Uses a thread pool of 4 workers (Pi 3 safe).
+    variants = list(dict.fromkeys([barcode, barcode.lower(), barcode.upper()]))
 
-        for v in variants:
-            url = f"{INVENTREE_URL}/api/part/?IPN={v}&category_detail=true"
-            response = API_SESSION.get(url, timeout=5)
-            if response.status_code == 200:
-                items = response.json()
-                results = items if isinstance(items, list) else items.get("results", [])
-                for item in results:
-                    if item.get("IPN", "").lower() == v.lower():
-                        if not item.get('_stock_item_pk'):
-                            item['_stock_item_pk'] = find_stock_item_for_part(item.get('pk'))
-                        BARCODE_CACHE.set(barcode, item)
-                        return item
-    except Exception: pass
+    def _try_part_barcode(v):
+        try:
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?barcode={v}&category_detail=true", timeout=5)
+            if r.status_code != 200: return None
+            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+            for item in results:
+                if item.get("barcode", "").lower() == v.lower() or item.get("IPN", "").lower() == v.lower():
+                    return item
+        except Exception: pass
+        return None
 
-    try:
-        url = f"{INVENTREE_URL}/api/stock/?barcode={barcode}&part_detail=true"
-        response = API_SESSION.get(url, timeout=5)
-        if response.status_code == 200:
-            items = response.json()
-            results = items if isinstance(items, list) else items.get("results", [])
+    def _try_part_ipn(v):
+        try:
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?IPN={v}&category_detail=true", timeout=5)
+            if r.status_code != 200: return None
+            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+            for item in results:
+                if item.get("IPN", "").lower() == v.lower():
+                    return item
+        except Exception: pass
+        return None
+
+    def _try_stock_barcode():
+        try:
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/stock/?barcode={barcode}&part_detail=true", timeout=5)
+            if r.status_code != 200: return None
+            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
             for item in results:
                 if item.get("barcode") == barcode:
                     stock_item_pk = item.get("pk")
                     part = item.get("part_detail") or fetch_part_details(item.get("part"))
                     if part:
                         part["_stock_item_pk"] = stock_item_pk
-                        BARCODE_CACHE.set(barcode, part)
                         return part
-    except Exception: pass
+        except Exception: pass
+        return None
+
+    tasks = []
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for v in variants:
+            tasks.append(ex.submit(_try_part_barcode, v))
+            tasks.append(ex.submit(_try_part_ipn, v))
+        tasks.append(ex.submit(_try_stock_barcode))
+        for future in as_completed(tasks):
+            result = future.result()
+            if result:
+                # Cancel remaining futures (best-effort)
+                for f in tasks: f.cancel()
+                if not result.get('_stock_item_pk'):
+                    result['_stock_item_pk'] = find_stock_item_for_part(result.get('pk'))
+                BARCODE_CACHE.set(barcode, result)
+                return result
 
     return None
 
@@ -826,14 +878,54 @@ def main():
     scanner = find_scanner()
     print("\n--- InvenTree Shopping System (Terminal Mode) ---")
     print(f"Makerspace: {HTL_NAME}")
-    
+
+    # Pre-warm barcode cache in the background so the first scan of any
+    # known part is an instant cache hit with zero network latency.
+    def _prewarm_cache():
+        if not INVENTREE_TOKEN: return
+        try:
+            page, loaded = 1, 0
+            while True:
+                r = API_SESSION.get(
+                    f"{INVENTREE_URL}/api/part/?limit=100&offset={(page-1)*100}&category_detail=true",
+                    timeout=10,
+                )
+                if r.status_code != 200: break
+                data = r.json()
+                results = data if isinstance(data, list) else data.get("results", [])
+                for part in results:
+                    bc = part.get("barcode") or part.get("IPN")
+                    if bc and not BARCODE_CACHE.get(bc):
+                        BARCODE_CACHE.cache[bc] = {
+                            "pk": part.get("pk"),
+                            "name": part.get("name"),
+                            "pricing_min": part.get("pricing_min"),
+                            "pricing_max": part.get("pricing_max"),
+                            "sell_price": part.get("sell_price"),
+                            "thumbnail": part.get("thumbnail"),
+                            "image": part.get("image"),
+                            "category_detail": part.get("category_detail"),
+                            "category": part.get("category"),
+                            "_stock_item_pk": None,  # fetched lazily on first scan
+                        }
+                        loaded += 1
+                if isinstance(data, list) or len(results) < 100: break
+                page += 1
+            if loaded:
+                BARCODE_CACHE.flush()  # persist the bulk load
+                print(f"[cache] Pre-warmed {loaded} parts from InvenTree")
+        except Exception as e:
+            print(f"[cache] Pre-warm failed: {e}")
+
+    threading.Thread(target=_prewarm_cache, daemon=True).start()
+
     cart = ShoppingCart()
     state = AppState.IDLE
     last_interaction = time.time()
     last_scan_time = 0
     TIMEOUT_SECONDS = 300
     last_part = None
-    
+
     render(disp, state, cart)
     
     try:
