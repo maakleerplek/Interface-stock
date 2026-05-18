@@ -103,6 +103,7 @@ def test_price_formatting():
     print("\nTesting price functions...")
     
     test_cases = [
+        ({'pricing_max': '15.00', 'pricing_min': '10.50'}, 15.00, "€15.00"),
         ({'pricing_min': '10.50'}, 10.50, "€10.50"),
         ({'sell_price': '20.00'}, 20.00, "€20.00"),
         ({}, 0.0, "-"),

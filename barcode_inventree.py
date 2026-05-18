@@ -164,6 +164,7 @@ class BarcodeCache:
                 "pk": part_detail.get("pk"),
                 "name": part_detail.get("name"),
                 "pricing_min": part_detail.get("pricing_min"),
+                "pricing_max": part_detail.get("pricing_max"),
                 "sell_price": part_detail.get("sell_price"),
                 "thumbnail": part_detail.get("thumbnail"),
                 "image": part_detail.get("image"),
@@ -310,7 +311,10 @@ def get_item_by_barcode(barcode):
 
 def extract_price(part_detail):
     if not part_detail: return 0.0
-    # pricing_min is usually the most reliable field
+    # Prefer pricing_max for the "maximum price" requirement, fall back to min or sell price
+    if part_detail.get('pricing_max'):
+        try: return float(part_detail['pricing_max'])
+        except: pass
     if part_detail.get('pricing_min'):
         try: return float(part_detail['pricing_min'])
         except: pass
