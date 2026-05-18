@@ -350,22 +350,26 @@ def extract_category(part_detail):
 
 def get_image(part_detail):
     img_path = part_detail.get('thumbnail') or part_detail.get('image')
-    if not img_path: return None
-    
+    if not img_path: 
+        print("DEBUG: No image path found in part_detail")
+        return None
+
     # Generate a local filename based on the part ID and filename
     part_id = part_detail.get('pk', 'unknown')
     ext = os.path.splitext(img_path)[1] or ".png"
     local_filename = f"image_cache/part_{part_id}{ext}"
-    
+
     # 1. Check if we have it locally already
     if os.path.exists(local_filename):
         try:
             return Image.open(local_filename)
-        except:
+        except Exception as e:
+            print(f"DEBUG: Local image error ({local_filename}): {e}")
             pass # If file is corrupt, try re-downloading
-            
+
     # 2. Download and cache
     img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
+    print(f"DEBUG: Fetching image from {img_url}")
     try:
         headers = {"Authorization": f"Token {INVENTREE_TOKEN}"}
         response = requests.get(img_url, headers=headers, timeout=5, verify=False)
@@ -374,11 +378,13 @@ def get_image(part_detail):
             # Save for next time
             with open(local_filename, "wb") as f:
                 f.write(img_data)
+            print(f"DEBUG: Saved image to {local_filename}")
             return Image.open(BytesIO(img_data))
+        else:
+            print(f"DEBUG: Image download failed with status {response.status_code}")
     except Exception as e:
         print(f"DEBUG: Image fetch error: {e}")
     return None
-
 # --- 3. Shopping Cart Management ---
 
 def find_stock_item_for_part(part_id):
@@ -640,14 +646,20 @@ def show_item_on_lcd(disp, part_detail, cart):
         draw.text((SPLIT_X + 20, 100), "EMPTY", font=FONT_SM, fill=COL_MUTED)
     else:
         y = 36
-        for part, qty in cart.items[:5]:
-            item_name = part.get('name', '?')[:9].upper()
+        for part, qty in cart.items[:4]:
+            full_name = part.get('name', '?').upper()
             draw.text((SPLIT_X + 6, y), f"{qty}×", font=FONT_SM, fill=COL_ACCENT)
-            draw.text((SPLIT_X + 6, y + 13), item_name, font=FONT_SM, fill=COL_FG)
-            y += 32
+            
+            # Wrap name into 2 lines
+            lines = textwrap.wrap(full_name, width=12)
+            if lines:
+                draw.text((SPLIT_X + 6, y + 13), lines[0], font=FONT_SM, fill=COL_FG)
+                if len(lines) > 1:
+                    draw.text((SPLIT_X + 6, y + 25), lines[1], font=FONT_SM, fill=COL_FG)
+            y += 40
 
-        if len(cart.items) > 5:
-            draw.text((SPLIT_X + 6, y), f"+{len(cart.items)-5}", font=FONT_SM, fill=COL_MUTED)
+        if len(cart.items) > 4:
+            draw.text((SPLIT_X + 6, y), f"+{len(cart.items)-4}", font=FONT_SM, fill=COL_MUTED)
 
         # Total bar at bottom
         draw.rectangle([SPLIT_X + BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_BG)
@@ -675,18 +687,28 @@ def show_confirmation_screen(disp, cart):
 
     # Item list
     y = 46
-    for part, qty in cart.items[:6]:
-        name = part.get('name', 'ITEM')[:22].upper()
+    for part, qty in cart.items[:5]:
+        full_name = part.get('name', 'ITEM').upper()
         price = extract_price(part) * qty
 
-        draw.text((10, y), f"{qty}×  {name}", font=FONT_SM, fill=COL_FG)
+        # Draw Qty and name with wrapping
+        lines = textwrap.wrap(full_name, width=22)
+        draw.text((10, y), f"{qty}×  {lines[0]}", font=FONT_SM, fill=COL_FG)
+        
+        # Price on the same line as the first line of name
         price_str = format_price(price)
         pw = draw.textlength(price_str, font=FONT_SM)
         draw.text((L_WIDTH - pw - 10, y), price_str, font=FONT_SM, fill=COL_ACCENT)
-        y += 22
+        
+        # Draw second line if it exists
+        if len(lines) > 1:
+            draw.text((42, y + 14), lines[1], font=FONT_SM, fill=COL_FG)
+            y += 30
+        else:
+            y += 22
 
-    if len(cart.items) > 6:
-        draw.text((10, y), f"+ {len(cart.items) - 6} MORE...", font=FONT_SM, fill=COL_MUTED)
+    if len(cart.items) > 5:
+        draw.text((10, y), f"+ {len(cart.items) - 5} MORE...", font=FONT_SM, fill=COL_MUTED)
 
     # Total block at bottom
     draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
