@@ -119,17 +119,6 @@ FONT_LG = ImageFont.truetype(_FONT_PATH, 18) if _HAS_FONT else ImageFont.load_de
 FONT_MD = ImageFont.truetype(_FONT_PATH, 14) if _HAS_FONT else ImageFont.load_default()
 FONT_SM = ImageFont.truetype(_FONT_PATH, 11) if _HAS_FONT else ImageFont.load_default()
 
-# Module-level reusable frame buffer — allocated once, cleared before each render.
-# lcd_worker is single-threaded so concurrent access is not a concern.
-# Saves ~230 KB allocation + GC pressure per render on Pi 3.
-_LCD_FRAME = Image.new('RGB', (L_WIDTH, L_HEIGHT), COL_BG)
-_LCD_DRAW  = ImageDraw.Draw(_LCD_FRAME)
-
-def _new_frame(bg=None):
-    """Clear and return the shared frame buffer instead of allocating a new Image."""
-    _LCD_DRAW.rectangle([0, 0, L_WIDTH - 1, L_HEIGHT - 1], fill=bg or COL_BG)
-    return _LCD_FRAME, _LCD_DRAW
-
 # Persistent executor for parallel fallback barcode lookups.
 # Creating ThreadPoolExecutor inside a with-block on every cache-miss
 # spawns 4 threads per scan — expensive on Pi 3. Reuse one instead.
@@ -140,13 +129,17 @@ def _wrap(text: str, width: int) -> tuple:
     """LRU-cached textwrap — same item names are wrapped repeatedly per render."""
     return tuple(textwrap.wrap(text, width=width))
 
+def _new_frame(bg=None):
+    """Allocate a fresh Image per render — safe for concurrent main/worker thread access."""
+    img = Image.new('RGB', (L_WIDTH, L_HEIGHT), bg or COL_BG)
+    return img, ImageDraw.Draw(img)
+
 def _show(disp, image):
-    # Pass the 320×240 image directly — ShowImage()'s MADCTL branch already
-    # handles landscape orientation (0x78) when it sees a (320, 240) image.
-    # Eliminates image.rotate(90, expand=True) which allocated a full 230 KB
-    # PIL Image copy on every render.
+    # rotate(90) is the proven, tested orientation path for this display.
+    # ShowImage's MADCTL 0x78 landscape branch was never exercised by this
+    # codebase, so we keep the safe software-rotate approach.
     if disp:
-        disp.ShowImage(image)
+        disp.ShowImage(image.rotate(90, expand=True))
 
 def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
     if fill: draw.rectangle(box, fill=fill)
