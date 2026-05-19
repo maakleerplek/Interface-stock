@@ -11,6 +11,7 @@ import qrcode
 import queue
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 from enum import Enum
 from dotenv import load_dotenv
@@ -118,13 +119,34 @@ FONT_LG = ImageFont.truetype(_FONT_PATH, 18) if _HAS_FONT else ImageFont.load_de
 FONT_MD = ImageFont.truetype(_FONT_PATH, 14) if _HAS_FONT else ImageFont.load_default()
 FONT_SM = ImageFont.truetype(_FONT_PATH, 11) if _HAS_FONT else ImageFont.load_default()
 
+# Module-level reusable frame buffer — allocated once, cleared before each render.
+# lcd_worker is single-threaded so concurrent access is not a concern.
+# Saves ~230 KB allocation + GC pressure per render on Pi 3.
+_LCD_FRAME = Image.new('RGB', (L_WIDTH, L_HEIGHT), COL_BG)
+_LCD_DRAW  = ImageDraw.Draw(_LCD_FRAME)
+
 def _new_frame(bg=None):
-    img = Image.new('RGB', (L_WIDTH, L_HEIGHT), bg or COL_BG)
-    return img, ImageDraw.Draw(img)
+    """Clear and return the shared frame buffer instead of allocating a new Image."""
+    _LCD_DRAW.rectangle([0, 0, L_WIDTH - 1, L_HEIGHT - 1], fill=bg or COL_BG)
+    return _LCD_FRAME, _LCD_DRAW
+
+# Persistent executor for parallel fallback barcode lookups.
+# Creating ThreadPoolExecutor inside a with-block on every cache-miss
+# spawns 4 threads per scan — expensive on Pi 3. Reuse one instead.
+_FALLBACK_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+@lru_cache(maxsize=256)
+def _wrap(text: str, width: int) -> tuple:
+    """LRU-cached textwrap — same item names are wrapped repeatedly per render."""
+    return tuple(textwrap.wrap(text, width=width))
 
 def _show(disp, image):
+    # Pass the 320×240 image directly — ShowImage()'s MADCTL branch already
+    # handles landscape orientation (0x78) when it sees a (320, 240) image.
+    # Eliminates image.rotate(90, expand=True) which allocated a full 230 KB
+    # PIL Image copy on every render.
     if disp:
-        disp.ShowImage(image.rotate(90, expand=True))
+        disp.ShowImage(image)
 
 def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
     if fill: draw.rectangle(box, fill=fill)
@@ -287,7 +309,8 @@ def get_item_by_barcode(barcode):
         try:
             r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?barcode={v}&category_detail=true", timeout=5)
             if r.status_code != 200: return None
-            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+            data = r.json()  # parse once — avoids double JSON decode
+            results = data if isinstance(data, list) else data.get("results", [])
             for item in results:
                 if item.get("barcode", "").lower() == v.lower() or item.get("IPN", "").lower() == v.lower():
                     return item
@@ -298,7 +321,8 @@ def get_item_by_barcode(barcode):
         try:
             r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?IPN={v}&category_detail=true", timeout=5)
             if r.status_code != 200: return None
-            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+            data = r.json()  # parse once
+            results = data if isinstance(data, list) else data.get("results", [])
             for item in results:
                 if item.get("IPN", "").lower() == v.lower():
                     return item
@@ -321,20 +345,21 @@ def get_item_by_barcode(barcode):
         return None
 
     tasks = []
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for v in variants:
-            tasks.append(ex.submit(_try_part_barcode, v))
-            tasks.append(ex.submit(_try_part_ipn, v))
-        tasks.append(ex.submit(_try_stock_barcode))
-        for future in as_completed(tasks):
-            result = future.result()
-            if result:
-                # Cancel remaining futures (best-effort)
-                for f in tasks: f.cancel()
-                if not result.get('_stock_item_pk'):
-                    result['_stock_item_pk'] = find_stock_item_for_part(result.get('pk'))
-                BARCODE_CACHE.set(barcode, result)
-                return result
+    # Use the module-level persistent executor — avoids spawning 4 threads per
+    # cache-miss scan (thread creation costs ~5–20 ms each on Pi 3).
+    for v in variants:
+        tasks.append(_FALLBACK_EXECUTOR.submit(_try_part_barcode, v))
+        tasks.append(_FALLBACK_EXECUTOR.submit(_try_part_ipn, v))
+    tasks.append(_FALLBACK_EXECUTOR.submit(_try_stock_barcode))
+    for future in as_completed(tasks):
+        result = future.result()
+        if result:
+            # Cancel remaining futures (best-effort)
+            for f in tasks: f.cancel()
+            if not result.get('_stock_item_pk'):
+                result['_stock_item_pk'] = find_stock_item_for_part(result.get('pk'))
+            BARCODE_CACHE.set(barcode, result)
+            return result
 
     return None
 
@@ -422,7 +447,8 @@ def send_changelog_event(action, item_name, quantity, price=None):
         try:
             payload = {"action": action, "source": "interface-stock", "item_name": item_name, "quantity": int(quantity)}
             if price is not None: payload["price"] = round(float(price), 2)
-            requests.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
+            # Use API_SESSION (keep-alive, connection pool) instead of bare requests.post
+            API_SESSION.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
         except Exception: pass
     threading.Thread(target=_send, daemon=True).start()
 
@@ -541,7 +567,7 @@ def show_item_on_lcd(disp, part_detail, cart):
             _border_rect(draw, [10, 42, 90, 122], fill=COL_BLOCK)
             draw.text((30, 72), "—", font=FONT_LG, fill=COL_MUTED)
 
-        lines = textwrap.wrap(name.upper(), width=16)
+        lines = list(_wrap(name.upper(), 16))  # lru_cache: same name wrapped once
         y_text = 44 if len(lines) > 1 else 50
         for line in lines[:2]:
             draw.text((100, y_text), line, font=FONT_MD, fill=COL_FG)
@@ -564,7 +590,7 @@ def show_item_on_lcd(disp, part_detail, cart):
         for part, qty in cart.items[:4]:
             full_name = part.get('name', '?').upper()
             draw.text((SPLIT_X + 6, y), f"{qty}×", font=FONT_MD, fill=COL_ACCENT)
-            lines = textwrap.wrap(full_name, width=14)
+            lines = list(_wrap(full_name, 14))  # lru_cache hit on repeat renders
             if lines:
                 draw.text((SPLIT_X + 30, y), lines[0], font=FONT_SM, fill=COL_FG)
                 if len(lines) > 1:
@@ -590,7 +616,7 @@ def show_confirmation_screen(disp, cart):
     for part, qty in cart.items[:4]:
         full_name = part.get('name', 'ITEM').upper()
         price = extract_price(part) * qty
-        lines = textwrap.wrap(full_name, width=24)
+        lines = list(_wrap(full_name, 24))  # lru_cache: cached per item name
         draw.text((10, y), f"{qty}×", font=FONT_MD, fill=COL_ACCENT)
         draw.text((38, y + 2), lines[0], font=FONT_SM, fill=COL_FG)
         price_str = format_price(price)
