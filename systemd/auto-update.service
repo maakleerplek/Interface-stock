@@ -1,0 +1,10 @@
+[Unit]
+Description=Interface-stock auto-update
+
+[Service]
+Type=oneshot
+ExecStart=__INSTALL_DIR__/update.sh
+WorkingDirectory=__INSTALL_DIR__
+User=__USER__
+StandardOutput=journal
+StandardError=journal

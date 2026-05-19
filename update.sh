@@ -34,6 +34,21 @@ else
     echo "Run install.sh first if you need the systemd service."
 fi
 
+# 4. Register the daily auto-update timer if not already installed
+if ! systemctl is-enabled --quiet interface-stock-update.timer 2>/dev/null; then
+    echo ""
+    echo "--- Installing daily auto-update timer (01:00) ---"
+    CURRENT_USER=$(whoami)
+    sed -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+        -e "s|__USER__|${CURRENT_USER}|g" \
+        "$INSTALL_DIR/systemd/auto-update.service" \
+        | sudo tee /etc/systemd/system/interface-stock-update.service > /dev/null
+    sudo cp "$INSTALL_DIR/systemd/auto-update.timer" /etc/systemd/system/interface-stock-update.timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now interface-stock-update.timer
+    echo "Timer installed: will auto-update daily at 01:00."
+fi
+
 echo ""
 echo "=== Update complete ==="
 echo ""

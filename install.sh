@@ -139,6 +139,18 @@ sudo systemctl enable --now tv-on.timer tv-off.timer
 echo "TV timers installed: on at 10:00, off at 12:00 daily."
 
 echo ""
+echo "--- Setting up daily auto-update timer (01:00) ---"
+CURRENT_USER=$(whoami)
+sed -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+    -e "s|__USER__|${CURRENT_USER}|g" \
+    "$INSTALL_DIR/systemd/auto-update.service" \
+    | sudo tee /etc/systemd/system/interface-stock-update.service > /dev/null
+sudo cp "$INSTALL_DIR/systemd/auto-update.timer" /etc/systemd/system/interface-stock-update.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now interface-stock-update.timer
+echo "Auto-update timer installed: runs daily at 01:00."
+
+echo ""
 echo "--- Setup Complete ---"
 echo ""
 echo "==================================================================="
