@@ -1,0 +1,29 @@
+#!/bin/bash
+
+flags=(
+   --kiosk
+   --touch-events=enabled
+   --disable-pinch
+   --noerrdialogs
+   --disable-session-crashed-bubble
+   --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'
+   --disable-component-update
+   --overscroll-history-navigation=0
+   --disable-features=TranslateUI
+   --disable-infobars
+   --no-memcheck
+   --force-device-scale-factor=1
+   --autoplay-policy=no-user-gesture-required
+   --disable-low-end-device-mode
+   --memory-pressure-off
+   --disable-background-networking
+   --disable-sync
+   --metrics-recording-only
+   --no-first-run
+)
+
+# Reload 20s after launch to clear any initial white screen
+(sleep 20 && DISPLAY=:0 xdotool key F5) &
+
+chromium-browser "${flags[@]}" --app=$(/opt/custompios/scripts/get_url)
+exit;
