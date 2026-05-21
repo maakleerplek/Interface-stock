@@ -123,6 +123,12 @@ else
 fi
 
 echo ""
+echo "--- Deploying Chromium startup script ---"
+sudo cp "$INSTALL_DIR/scripts/start_chromium_browser" /opt/custompios/scripts/start_chromium_browser
+sudo chmod +x /opt/custompios/scripts/start_chromium_browser
+echo "Chromium startup script deployed to /opt/custompios/scripts/."
+
+echo ""
 echo "--- Setting up TV CEC timers ---"
 INSTALL_DIR=$(pwd)
 chmod +x "$INSTALL_DIR/scripts/tv-on.sh" "$INSTALL_DIR/scripts/tv-off.sh"
