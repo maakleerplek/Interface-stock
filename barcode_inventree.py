@@ -1013,8 +1013,16 @@ def main():
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
-        if HAS_LCD and 'config' in globals() and hasattr(config, 'module_exit'):
-            config.module_exit()
+        # Cleanup must never raise: this runs while an exception from the main
+        # loop is propagating, and anything thrown here replaces it. That is
+        # exactly what used to happen — config.module_exit() was called without
+        # its `spi` argument, so every real crash surfaced as a TypeError from
+        # this line and the actual traceback was lost.
+        if disp is not None:
+            try:
+                disp.module_exit()
+            except Exception as err:
+                print(f"[LCD] cleanup failed: {err}")
 
 if __name__ == "__main__":
     main()

@@ -125,5 +125,24 @@ class LCD_2inch4:
         # writebytes2() accepts raw bytes directly — no Python list overhead
         self._spi.writebytes2(rgb565_be.tobytes())
 
+    def module_exit(self):
+        """Release the SPI bus, backlight and GPIO pins.
+
+        This driver opens its own spidev handle and claims its own pins in
+        _module_init(), so it has to release them itself. lcdconfig's
+        module_exit(spi) belongs to the Waveshare reference driver, which this
+        class does not use.
+        """
+        try:
+            if self._spi is not None:
+                self._spi.close()
+                self._spi = None
+        finally:
+            try:
+                GPIO.output(self.BL_PIN, GPIO.LOW)
+            except Exception:
+                pass          # pins may already be released
+            GPIO.cleanup()
+
 
 LCD_2in4 = LCD_2inch4
