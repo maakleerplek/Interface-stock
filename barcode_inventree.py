@@ -8,6 +8,7 @@ import textwrap
 import requests
 import threading
 import traceback
+import fcntl
 import qrcode
 import queue
 from io import BytesIO
@@ -1079,7 +1080,40 @@ def read_scancode(device):
     except Exception:
         return None
 
+_INSTANCE_LOCK_PATH = "/tmp/inventree-scanner.lock"
+_instance_lock_fh = None  # kept open for the process lifetime; closing frees the lock
+
+
+def claim_single_instance():
+    """Refuse to run if another copy already owns the LCD.
+
+    The panel is a physical singleton on one SPI bus. Two processes both
+    pushing full frames just overwrite each other, which looks exactly like a
+    dead display. This happened for real on 2026-09-21: a service instance
+    escaped its cgroup on restart and ran alongside its replacement for 90
+    minutes. The lock is an flock, so it is released automatically even if we
+    are SIGKILLed - no stale lock file to clean up by hand.
+    """
+    global _instance_lock_fh
+    try:
+        _instance_lock_fh = open(_INSTANCE_LOCK_PATH, "w")
+        fcntl.flock(_instance_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"[instance] another copy already holds {_INSTANCE_LOCK_PATH} - refusing to start")
+        print("[instance] stop it first:  sudo systemctl stop inventree-scanner")
+        return False
+    except OSError as e:
+        print(f"[instance] could not take the lock ({e}) - continuing unguarded")
+        return True
+    _instance_lock_fh.write(str(os.getpid()))
+    _instance_lock_fh.flush()
+    return True
+
+
 def main():
+    if not claim_single_instance():
+        sys.exit(1)
+
     disp = None
     if HAS_LCD:
         try:

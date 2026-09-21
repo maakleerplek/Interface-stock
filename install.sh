@@ -83,6 +83,19 @@ echo ""
 echo "--- Setting up InvenTree Shopping System Auto-Start ---"
 if [ -f "inventree-scanner.service" ]; then
     echo "Installing systemd service..."
+
+    # Retire any older unit that runs the same script under a different name.
+    # An install on 2026-09-21 left barcode-inventree.service enabled alongside
+    # the new one: two services, one SPI bus, and the LCD blanked because each
+    # process overwrote the other's frames. Disable, never silently co-exist.
+    for legacy in barcode-inventree.service; do
+        if systemctl list-unit-files "$legacy" >/dev/null 2>&1 \
+           && [ "$(systemctl is-enabled "$legacy" 2>/dev/null)" != "" ]; then
+            echo "Retiring legacy unit: $legacy"
+            sudo systemctl disable --now "$legacy" 2>/dev/null || true
+        fi
+    done
+
     
     # Get the current directory and user
     INSTALL_DIR=$(pwd)

@@ -3,8 +3,16 @@ Description=InvenTree Shopping System Service
 After=network.target
 
 [Service]
+# Clear any instance that escaped a previous stop before we start a new one.
+# The bracket in [b]arcode stops the pattern matching this sh command itself.
+# Leading "-" so a clean system (nothing to kill) is not a startup failure.
+ExecStartPre=-/bin/sh -c 'pkill -f "[b]arcode_inventree.py"; sleep 1'
 # Use the python binary from the virtual environment
 ExecStart=__INSTALL_DIR__/.venv/bin/python __INSTALL_DIR__/barcode_inventree.py
+# Make sure a stop really stops every process in the cgroup
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=15
 WorkingDirectory=__INSTALL_DIR__
 StandardOutput=journal
 StandardError=journal
