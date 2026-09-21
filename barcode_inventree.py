@@ -420,19 +420,44 @@ def get_image(part_detail, size=(80, 80)):
     _THUMBNAIL_CACHE[cache_key] = img
     return img
 
-def find_stock_item_for_part(part_id):
-    if not part_id: return None
+class StockLookupError(Exception):
+    """InvenTree could not be reached, so the stock level is unknown."""
+
+
+def find_stock_item_with_quantity(part_id):
+    """Return (stock_item_pk, quantity) for the fullest in-stock item of this part.
+
+    (None, 0.0) means the part genuinely has no stock left. A failed API call raises
+    StockLookupError instead, so "out of stock" is never mistaken for "server down" —
+    the caller must refuse the sale in both cases, but says something different.
+    """
+    if not part_id:
+        return None, 0.0
     url = f"{INVENTREE_URL}/api/stock/?part={part_id}&in_stock=true"
     try:
         response = API_SESSION.get(url, timeout=5)
-        if response.status_code == 200:
-            items = response.json()
-            results = items if isinstance(items, list) else items.get("results", [])
-            if results:
-                results.sort(key=lambda x: float(x.get('quantity', 0)), reverse=True)
-                return results[0].get('pk')
-    except Exception: pass
-    return None
+    except Exception as exc:
+        raise StockLookupError(str(exc)) from exc
+    if response.status_code != 200:
+        raise StockLookupError(f"HTTP {response.status_code}")
+    try:
+        items = response.json()
+    except Exception as exc:
+        raise StockLookupError("bad JSON") from exc
+    results = items if isinstance(items, list) else items.get("results", [])
+    if not results:
+        return None, 0.0
+    results.sort(key=lambda x: float(x.get('quantity', 0)), reverse=True)
+    best = results[0]
+    return best.get('pk'), float(best.get('quantity', 0) or 0)
+
+
+def find_stock_item_for_part(part_id):
+    try:
+        pk, _ = find_stock_item_with_quantity(part_id)
+    except StockLookupError:
+        return None
+    return pk
 
 def send_changelog_event(action, item_name, quantity, price=None):
     if not TV_PRESENTATION_URL: return
@@ -451,10 +476,21 @@ def remove_stock_from_inventree(cart):
     headers = {"Content-Type": "application/json"}
     url = f"{INVENTREE_URL}/api/stock/remove/"
     
+    # Re-check every line against live stock. InvenTree clamps a removal at zero
+    # instead of refusing it, so without this a cart can be charged for stock that
+    # is no longer there. Refuse the whole cart rather than quietly dropping a line.
     items_to_remove = []
     for part_detail, quantity in cart.items:
-        stock_item_pk = part_detail.get('_stock_item_pk') or find_stock_item_for_part(part_detail.get('pk'))
-        if stock_item_pk: items_to_remove.append({"pk": stock_item_pk, "quantity": float(quantity)})
+        name = part_detail.get('name', 'item')
+        try:
+            stock_item_pk, available = find_stock_item_with_quantity(part_detail.get('pk'))
+        except StockLookupError:
+            return False, "Cannot reach InvenTree to verify stock"
+        if stock_item_pk is None or available <= 0:
+            return False, f"{name} is out of stock"
+        if available < quantity:
+            return False, f"Only {int(available)}x {name} left"
+        items_to_remove.append({"pk": stock_item_pk, "quantity": float(quantity)})
 
     if not items_to_remove: return False, "No stock items found to remove"
 
@@ -483,6 +519,15 @@ class ShoppingCart:
                 self.items[i] = (item, qty + 1)
                 return
         self.items.append((part_detail, 1))
+
+    def quantity_of(self, part_detail):
+        """Units of this exact stock item already in the cart."""
+        pk = part_detail.get('pk')
+        spk = part_detail.get('_stock_item_pk')
+        for item, qty in self.items:
+            if item.get('pk') == pk and item.get('_stock_item_pk') == spk:
+                return qty
+        return 0
 
     def remove_last_item(self):
         if not self.items: return None
@@ -673,7 +718,17 @@ def show_payment_qr(disp, cart):
 
 def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part):
     if state == AppState.IDLE:
-        show_idle_screen(disp)
+        # A refused first scan lands back on IDLE. Without this the warning would
+        # never reach the screen and the item would just look ignored.
+        if message and "ERROR" in message.upper():
+            show_warning_screen(disp, "ERROR", message)
+
+            def _delayed_idle(d):
+                time.sleep(1.8)
+                LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
+            threading.Thread(target=_delayed_idle, args=(disp,), daemon=True).start()
+        else:
+            show_idle_screen(disp)
     elif state == AppState.SHOPPING:
         if message and "ERROR" in message.upper():
             show_warning_screen(disp, "ERROR", message)
@@ -780,6 +835,32 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
         _drain_lcd_queue()
         LCD_QUEUE.put((disp, state, cart_snap, message, item_name, item_price, last_part))
 
+def try_add_to_cart(cart, part):
+    """Add one unit of `part`, but only if InvenTree actually has it.
+
+    Returns (added, message). On refusal the message always contains "ERROR", which
+    is what the LCD renderer keys on to show a warning screen.
+    """
+    try:
+        stock_pk, available = find_stock_item_with_quantity(part.get('pk'))
+    except StockLookupError:
+        return False, "ERROR: Cannot reach InvenTree. Try again."
+
+    name = part.get('name', 'Item')
+    if stock_pk is None or available <= 0:
+        return False, f"ERROR: {name} is out of stock."
+
+    # Pin the stock item we just counted, so checkout removes from that same one
+    # rather than a pk cached from an earlier scan.
+    part['_stock_item_pk'] = stock_pk
+
+    if cart.quantity_of(part) + 1 > available:
+        return False, f"ERROR: Only {int(available)}x {name} in stock."
+
+    cart.add_item(part)
+    return True, None
+
+
 # --- Main App Logic ---
 def handle_barcode(state, barcode, cart):
     """Returns (new_state, message, item_name, item_price, last_part)"""
@@ -790,7 +871,9 @@ def handle_barcode(state, barcode, cart):
             return AppState.IDLE, "Cart is empty.", None, None, None
         part = get_item_by_barcode(barcode)
         if part:
-            cart.add_item(part)
+            added, err = try_add_to_cart(cart, part)
+            if not added:
+                return AppState.IDLE, err, None, None, None
             return AppState.SHOPPING, None, part.get('name'), extract_price(part), part
         return AppState.IDLE, f"Unknown Barcode: {barcode}", None, None, None
 
@@ -811,7 +894,9 @@ def handle_barcode(state, barcode, cart):
         else:
             part = get_item_by_barcode(barcode)
             if part:
-                cart.add_item(part)
+                added, err = try_add_to_cart(cart, part)
+                if not added:
+                    return AppState.SHOPPING, err, None, None, None
                 return AppState.SHOPPING, None, part.get('name'), extract_price(part), part
             return AppState.SHOPPING, f"Unknown Barcode: {barcode}", None, None, None
 
@@ -825,7 +910,9 @@ def handle_barcode(state, barcode, cart):
             # Any product scan also resumes shopping
             part = get_item_by_barcode(barcode)
             if part:
-                cart.add_item(part)
+                added, err = try_add_to_cart(cart, part)
+                if not added:
+                    return AppState.SHOPPING, err, None, None, None
                 return AppState.SHOPPING, "Cancellation aborted.", part.get('name'), extract_price(part), part
             return AppState.SHOPPING, "Cancellation aborted. Cart unchanged.", None, None, None
 
@@ -840,7 +927,9 @@ def handle_barcode(state, barcode, cart):
         else:
             part = get_item_by_barcode(barcode)
             if part:
-                cart.add_item(part)
+                added, err = try_add_to_cart(cart, part)
+                if not added:
+                    return AppState.SHOPPING, err, None, None, None
                 return AppState.SHOPPING, "Item added. Re-scan CONFIRM when ready.", part.get('name'), extract_price(part), part
             return AppState.CHECKOUT_CONFIRM, f"Unknown Barcode: {barcode}", None, None, None
 
