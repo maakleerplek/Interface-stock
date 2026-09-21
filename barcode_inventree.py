@@ -7,6 +7,7 @@ import atexit
 import textwrap
 import requests
 import threading
+import traceback
 import qrcode
 import queue
 from io import BytesIO
@@ -61,6 +62,15 @@ API_SESSION.mount("http://", _adapter)
 # Background LCD rendering queue - maxsize=1 so we always render the LATEST frame
 # We drain it before pushing so stale frames never block responsiveness
 LCD_QUEUE = queue.Queue()
+
+# Set when the panel needs its init sequence re-sent before the next frame.
+# A 5V brownout resets the ILI9341's registers, but SPI is write-only: our
+# writes keep "succeeding" into a dead panel and nothing ever reports an error.
+LCD_REINIT = threading.Event()
+
+# The most recent render task, so the undervoltage watchdog can repaint the
+# screen exactly as it was instead of guessing at the app state.
+LAST_RENDER = None
 
 # Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
@@ -138,8 +148,18 @@ def _show(disp, image):
     # rotate(90) is the proven, tested orientation path for this display.
     # ShowImage's MADCTL 0x78 landscape branch was never exercised by this
     # codebase, so we keep the safe software-rotate approach.
-    if disp:
-        disp.ShowImage(image.rotate(90, expand=True))
+    if not disp: return
+    # Runs on the lcd_worker thread, the only SPI writer, so re-initialising
+    # here can never race with a frame already going out over the bus.
+    if LCD_REINIT.is_set():
+        LCD_REINIT.clear()
+        try:
+            disp.Init()
+            disp.clear()
+            print("[lcd] panel re-initialised after undervoltage")
+        except Exception as e:
+            print(f"[lcd] re-init failed: {e}")
+    disp.ShowImage(image.rotate(90, expand=True))
 
 def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
     if fill: draw.rectangle(box, fill=fill)
@@ -806,6 +826,56 @@ def _drain_lcd_queue():
         except queue.Empty:
             break
 
+def _undervoltage_alarm_path():
+    """Path to the Pi's live undervoltage flag, or None on non-Pi hardware.
+
+    The rpi_volt hwmon device exposes in0_lcrit_alarm: 1 while the 5V rail is
+    below spec, back to 0 once it recovers. This is the same event the kernel
+    logs as "Undervoltage detected!" / "Voltage normalised".
+    """
+    for hwmon in glob.glob("/sys/class/hwmon/hwmon*"):
+        try:
+            with open(os.path.join(hwmon, "name")) as f:
+                if f.read().strip() != "rpi_volt": continue
+        except OSError:
+            continue
+        alarm = os.path.join(hwmon, "in0_lcrit_alarm")
+        if os.path.exists(alarm): return alarm
+    return None
+
+
+def undervoltage_watchdog(poll_s=3):
+    """Repaint the LCD after every brownout.
+
+    A dip resets the panel but leaves this process running happily, so without
+    this the screen stays dead until someone restarts the service by hand.
+    We watch for the falling edge (alarm 1 -> 0, i.e. voltage recovered) and
+    then re-init the panel and push the last frame again.
+    """
+    alarm = _undervoltage_alarm_path()
+    if not alarm:
+        print("[lcd] no rpi_volt hwmon device - undervoltage watchdog disabled")
+        return
+    was_alarmed = False
+    while True:
+        try:
+            with open(alarm) as f:
+                alarmed = f.read().strip() == "1"
+        except OSError:
+            time.sleep(poll_s); continue
+
+        if alarmed and not was_alarmed:
+            print("[lcd] undervoltage detected - display may reset")
+        elif was_alarmed and not alarmed:
+            print("[lcd] voltage normalised - repainting display")
+            LCD_REINIT.set()
+            if LAST_RENDER:
+                _drain_lcd_queue()
+                LCD_QUEUE.put(LAST_RENDER)
+        was_alarmed = alarmed
+        time.sleep(poll_s)
+
+
 def lcd_worker():
     while True:
         task = LCD_QUEUE.get()
@@ -863,10 +933,13 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
     print("="*40)
     
     if disp:
+        global LAST_RENDER
         cart_snap = CartSnapshot(cart)
+        task = (disp, state, cart_snap, message, item_name, item_price, last_part)
+        LAST_RENDER = task
         # Drain stale frames so only the latest render hits the display
         _drain_lcd_queue()
-        LCD_QUEUE.put((disp, state, cart_snap, message, item_name, item_price, last_part))
+        LCD_QUEUE.put(task)
 
 def try_add_to_cart(cart, part):
     """Add one unit of `part`, but only if InvenTree actually has it.
@@ -1014,10 +1087,21 @@ def main():
             else: disp = LCD.LCD_2in4()
             disp.Init()
             disp.clear()
-        except: disp = None
+        except Exception:
+            # Never swallow this silently: a dead LCD used to look identical to
+            # a healthy run in the journal, which cost hours of debugging.
+            disp = None
+            traceback.print_exc()
+            print("[lcd] init FAILED - continuing without a display")
+    elif not lib_path:
+        print("[lcd] driver library not found - continuing without a display")
+
+    if disp:
+        threading.Thread(target=undervoltage_watchdog, daemon=True).start()
 
     scanner = find_scanner()
-    print("\n--- InvenTree Shopping System (Terminal Mode) ---")
+    mode = "LCD" if disp else "Terminal"
+    print(f"\n--- InvenTree Shopping System ({mode} Mode) ---")
     print(f"Makerspace: {HTL_NAME}")
 
     # Pre-warm barcode cache in the background so the first scan of any
