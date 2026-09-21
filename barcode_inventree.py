@@ -394,16 +394,12 @@ def extract_price(part_detail):
     price = _SALE_PRICES.get(part_detail.get('pk'))
     if price is not None:
         return price
-    # Fallbacks for a part with no sale price break yet.
-    if part_detail.get('pricing_max'):
-        try: return float(part_detail['pricing_max'])
-        except: pass
-    if part_detail.get('pricing_min'):
-        try: return float(part_detail['pricing_min'])
-        except: pass
-    if part_detail.get('sell_price'):
-        try: return float(part_detail['sell_price'])
-        except: pass
+    # No fallback to pricing_max/pricing_min on purpose. Those are InvenTree's
+    # cost figures now that the selling price lives in the sale price break, so
+    # falling back to them would quietly charge the supplier cost — half price,
+    # plausible enough that nobody notices. 0.00 is obviously wrong instead.
+    print(f"WARNING: no sale price for part {part_detail.get('pk')} "
+          f"({part_detail.get('name')}) - showing 0.00")
     return 0.0
 
 def format_price(price):
