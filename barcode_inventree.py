@@ -356,8 +356,45 @@ def get_item_by_barcode(barcode):
 
     return None
 
+# Selling price per part pk, from InvenTree's sale price breaks. pricing_max is
+# the wrong source: it is the "overall" cost range, which only happened to equal
+# the till price while the selling price was being stored in purchase_price.
+_SALE_PRICES: dict = {}
+_SALE_PRICES_FETCHED: float = 0.0
+_SALE_PRICE_TTL = 300  # seconds
+
+
+def refresh_sale_prices(force=False):
+    """Reload the sale price table. Keeps the old one if InvenTree is unreachable."""
+    global _SALE_PRICES, _SALE_PRICES_FETCHED
+    if not force and (time.time() - _SALE_PRICES_FETCHED) < _SALE_PRICE_TTL:
+        return
+    try:
+        r = API_SESSION.get(f"{INVENTREE_URL}/api/part/sale-price/?limit=500", timeout=5)
+        if r.status_code != 200:
+            return
+        results = r.json().get("results", [])
+    except Exception:
+        return
+    best = {}
+    for b in results:
+        try:
+            part, qty, price = b["part"], float(b["quantity"]), float(b["price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if part not in best or qty < best[part][0]:
+            best[part] = (qty, price)
+    _SALE_PRICES = {part: price for part, (_, price) in best.items()}
+    _SALE_PRICES_FETCHED = time.time()
+
+
 def extract_price(part_detail):
     if not part_detail: return 0.0
+    refresh_sale_prices()
+    price = _SALE_PRICES.get(part_detail.get('pk'))
+    if price is not None:
+        return price
+    # Fallbacks for a part with no sale price break yet.
     if part_detail.get('pricing_max'):
         try: return float(part_detail['pricing_max'])
         except: pass
