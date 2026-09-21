@@ -145,6 +145,29 @@ def _new_frame(bg=None):
     img = Image.new('RGB', (L_WIDTH, L_HEIGHT), bg or COL_BG)
     return img, ImageDraw.Draw(img)
 
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media", "htl-logo.png")
+
+
+@lru_cache(maxsize=4)
+def _get_logo(height):
+    """Load, trim and scale the HTL logo once per size.
+
+    The source PNG carries a wide transparent margin, so we crop to the alpha
+    bounding box first - otherwise the mark renders small and off-centre in
+    whatever slot we give it. Cached because the Pi 3A+ is slow and the idle
+    screen repaints on every return to IDLE.
+    """
+    try:
+        logo = Image.open(_LOGO_PATH).convert("RGBA")
+        bbox = logo.getchannel("A").getbbox()
+        if bbox: logo = logo.crop(bbox)
+        w = max(1, round(logo.width * height / logo.height))
+        return logo.resize((w, height), Image.LANCZOS)
+    except Exception as e:
+        print(f"[lcd] logo unavailable: {e}")
+        return None
+
+
 def _show(disp, image):
     # rotate(90) is the proven, tested orientation path for this display.
     # ShowImage's MADCTL 0x78 landscape branch was never exercised by this
@@ -165,6 +188,11 @@ def _show(disp, image):
 def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
     if fill: draw.rectangle(box, fill=fill)
     draw.rectangle(box, outline=border_color or COL_BORDER, width=width)
+
+def _col_text(draw, cx, y, text, font, fill=COL_FG):
+    """Centre text on an arbitrary x - _center_text only centres on the canvas."""
+    draw.text((cx - draw.textlength(text, font=font) / 2, y), text, font=font, fill=fill)
+
 
 def _center_text(draw, y, text, font, fill=COL_FG, area_width=L_WIDTH):
     w = draw.textlength(text, font=font)
@@ -634,10 +662,28 @@ def show_idle_screen(disp):
     if not disp: return
     image, draw = _new_frame()
     _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
-    _border_rect(draw, [20, 40, L_WIDTH - 21, L_HEIGHT - 60], fill=COL_BLOCK)
-    _center_text(draw, 65, "SCAN", FONT_XL, fill=COL_ACCENT)
-    draw.rectangle([50, 105, L_WIDTH - 50, 107], fill=COL_BORDER)
-    _center_text(draw, 120, "READY", FONT_LG, fill=COL_MUTED)
+    BLOCK = [20, 40, L_WIDTH - 21, L_HEIGHT - 60]
+    _border_rect(draw, BLOCK, fill=COL_BLOCK)
+
+    logo = _get_logo(88)
+    if logo:
+        # Logo left, wordmark right, split by a rule - so the two halves read
+        # as one unit instead of the logo floating over the text.
+        lx = 44
+        ly = BLOCK[1] + (BLOCK[3] - BLOCK[1] - logo.height) // 2
+        image.paste(logo, (lx, ly), logo)
+        split_x = 150
+        draw.rectangle([split_x, 62, split_x + 1, 158], fill=COL_MUTED)
+        col_cx = (split_x + BLOCK[2]) // 2
+        _col_text(draw, col_cx, 78, "SCAN", FONT_XL, fill=COL_ACCENT)
+        draw.rectangle([split_x + 22, 114, BLOCK[2] - 22, 116], fill=COL_BORDER)
+        _col_text(draw, col_cx, 126, "READY", FONT_LG, fill=COL_MUTED)
+    else:
+        # Same layout as before the logo existed, so a missing file still works
+        _center_text(draw, 65, "SCAN", FONT_XL, fill=COL_ACCENT)
+        draw.rectangle([50, 105, L_WIDTH - 50, 107], fill=COL_BORDER)
+        _center_text(draw, 120, "READY", FONT_LG, fill=COL_MUTED)
+
     _center_text(draw, L_HEIGHT - 45, HTL_NAME[:30].upper(), FONT_SM, fill=COL_MUTED)
     _show(disp, image)
 
