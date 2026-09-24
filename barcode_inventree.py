@@ -77,6 +77,11 @@ LAST_RENDER = None
 CONFIRM_BARCODE = "CONFIRM"
 CANCEL_BARCODE = "CANCEL"
 REMOVE_BARCODE = "REMOVE"
+# Volunteers get a free drink after a workshop or openlab shift. Scanning this
+# makes the whole cart free (group buys at meetings) and books the removal as
+# a volunteer drink instead of a sale, so the analytics can tell them apart.
+VOLUNTEER_BARCODE = "VOLUNTEER"
+COMMAND_BARCODES = (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE, VOLUNTEER_BARCODE)
 
 # AZERTY Scan Code Map (for evdev)
 SCAN_CODES = {
@@ -108,6 +113,7 @@ class AppState(Enum):
     CHECKOUT_CONFIRM = "CHECKOUT_CONFIRM"
     PROCESSING = "PROCESSING"
     QR_DISPLAY = "QR_DISPLAY"
+    VOLUNTEER_DONE = "VOLUNTEER_DONE"  # free checkout done; shown briefly, then IDLE
 
 # --- BRUTALISM DESIGN SYSTEM ---
 COL_BG      = (10, 10, 10)       # Near-black background
@@ -576,12 +582,19 @@ def remove_stock_from_inventree(cart):
 
     if not items_to_remove: return False, "No stock items found to remove"
 
-    payload = {"items": items_to_remove, "notes": f"Purchased via Interface-stock ({HTL_NAME})"}
+    if cart.volunteer:
+        notes = f"Volunteer drink via Interface-stock ({HTL_NAME})"
+    else:
+        notes = f"Purchased via Interface-stock ({HTL_NAME})"
+    payload = {"items": items_to_remove, "notes": notes}
 
     try:
         response = API_SESSION.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code in [200, 201]:
             for part_detail, quantity in cart.items:
+                if cart.volunteer:
+                    send_changelog_event("volunteer", part_detail.get("name", "Unknown"), quantity)
+                    continue
                 unit_price = extract_price(part_detail)
                 total_price = unit_price * quantity if unit_price else None
                 send_changelog_event("checkout", part_detail.get("name", "Unknown"), quantity, total_price)
@@ -591,7 +604,9 @@ def remove_stock_from_inventree(cart):
 
 # --- Shopping Cart Management ---
 class ShoppingCart:
-    def __init__(self): self.items = []
+    def __init__(self):
+        self.items = []
+        self.volunteer = False  # whole cart is a free volunteer drink
 
     def add_item(self, part_detail):
         pk = part_detail.get('pk')
@@ -623,12 +638,15 @@ class ShoppingCart:
     def get_description(self):
         cats = self.get_categories()
         return f"{HTL_NAME}: " + ",".join(cats) if cats else f"{HTL_NAME} - Purchase"
-    def clear(self): self.items = []
+    def clear(self):
+        self.items = []
+        self.volunteer = False
     def is_empty(self): return len(self.items) == 0
 
 class CartSnapshot:
     def __init__(self, cart):
         self.items = list(cart.items)
+        self.volunteer = cart.volunteer
         self._total = cart.get_total()
         self._cats = cart.get_categories()
         self._desc = cart.get_description()
@@ -739,15 +757,22 @@ def show_item_on_lcd(disp, part_detail, cart):
 
         draw.rectangle([SPLIT_X + BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_BG)
         draw.rectangle([SPLIT_X, L_HEIGHT - 42, L_WIDTH - 1, L_HEIGHT - 42 + 2], fill=COL_BORDER)
-        draw.text((SPLIT_X + 6, L_HEIGHT - 36), format_price(cart.get_total()), font=FONT_LG, fill=COL_ACCENT2)
+        if cart.volunteer:
+            draw.text((SPLIT_X + 6, L_HEIGHT - 36), "FREE", font=FONT_LG, fill=COL_SUCCESS)
+        else:
+            draw.text((SPLIT_X + 6, L_HEIGHT - 36), format_price(cart.get_total()), font=FONT_LG, fill=COL_ACCENT2)
     _show(disp, image)
 
 def show_confirmation_screen(disp, cart):
     if not disp: return
     image, draw = _new_frame()
     _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
-    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
-    _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
+    if cart.volunteer:
+        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_SUCCESS)
+        _center_text(draw, 8, "VOLUNTEER - FREE", FONT_LG, fill=COL_BG)
+    else:
+        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
+        _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
     draw.rectangle([BORDER_W, 37, L_WIDTH - BORDER_W - 1, 39], fill=COL_BORDER)
 
     y = 46
@@ -771,9 +796,10 @@ def show_confirmation_screen(disp, cart):
     draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
     draw.rectangle([BORDER_W, L_HEIGHT - 82, L_WIDTH - BORDER_W - 1, L_HEIGHT - 80], fill=COL_BORDER)
     draw.text((10, L_HEIGHT - 78), "TOTAL", font=FONT_LG, fill=COL_FG)
-    total_str = format_price(cart.get_total())
+    total_str = "FREE" if cart.volunteer else format_price(cart.get_total())
     tw = draw.textlength(total_str, font=FONT_XL)
-    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL, fill=COL_ACCENT2)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL,
+              fill=COL_SUCCESS if cart.volunteer else COL_ACCENT2)
 
     _center_text(draw, L_HEIGHT - 55, "SCANNING CONFIRM WILL REMOVE FROM STOCK", FONT_SM, fill=COL_ACCENT)
     draw.rectangle([BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
@@ -838,8 +864,11 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
                 LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
                                None, None, None, p))
             threading.Thread(target=_delayed_cart_view, args=(disp, cart, last_part), daemon=True).start()
-        elif message and ("Removed" in message or "Aborted" in message):
-            show_message_screen(disp, "INFO", message, color=COL_DANGER)
+        elif message and ("Removed" in message or "Aborted" in message or "Volunteer" in message):
+            if message.startswith("Volunteer drink"):
+                show_message_screen(disp, "VOLUNTEER", message, color=COL_SUCCESS)
+            else:
+                show_message_screen(disp, "INFO", message, color=COL_DANGER)
             def _delayed_cart_view(d, c, p):
                 time.sleep(0.9)
                 LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
@@ -863,6 +892,13 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
         show_message_screen(disp, "PROCESSING", "Removing items from InvenTree stock...", color=COL_ACCENT2)
     elif state == AppState.QR_DISPLAY:
         show_payment_qr(disp, cart)
+    elif state == AppState.VOLUNTEER_DONE:
+        show_message_screen(disp, "FREE", "Thanks for volunteering! Enjoy your drink.", color=COL_SUCCESS)
+
+        def _delayed_idle_after_thanks(d):
+            time.sleep(3)
+            LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
+        threading.Thread(target=_delayed_idle_after_thanks, args=(disp,), daemon=True).start()
 
 def _drain_lcd_queue():
     """Discard all pending LCD render tasks so only the latest is shown."""
@@ -950,7 +986,7 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
             print("-" * 20)
         for part, qty in cart.items:
             print(f"{qty}x {part.get('name', 'Unknown')} - {format_price(extract_price(part) * qty)}")
-        print(f"TOTAL: {format_price(cart.get_total())}")
+        print(f"TOTAL: {'FREE (volunteer)' if cart.volunteer else format_price(cart.get_total())}")
         print("Commands: [CONFIRM] to checkout | [REMOVE] to undo | [CANCEL] to confirm cancel")
         
     elif state == AppState.CANCEL_CONFIRM:
@@ -964,7 +1000,7 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
         for part, qty in cart.items:
             print(f"{qty}x {part.get('name', 'Unknown')}")
         print("-" * 20)
-        print(f"GRAND TOTAL: {format_price(cart.get_total())}")
+        print(f"GRAND TOTAL: {'FREE (volunteer)' if cart.volunteer else format_price(cart.get_total())}")
         print("Scan [CONFIRM] to finalize | [CANCEL] to confirm cancel | [REMOVE] to go back.")
         
     elif state == AppState.PROCESSING:
@@ -976,6 +1012,10 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
         print(f"Total Due: {format_price(cart.get_total())}")
         if message: print(f"\n{message}")
         print("\nScan [CONFIRM], [CANCEL], or [REMOVE] to start a new transaction.")
+
+    elif state == AppState.VOLUNTEER_DONE:
+        print("--- VOLUNTEER DRINK ---")
+        print("Stock removed as a free volunteer drink. Ready for the next customer.")
 
     print("="*40)
     
@@ -1014,13 +1054,21 @@ def try_add_to_cart(cart, part):
     return True, None
 
 
+def toggle_volunteer(cart):
+    """Flip the free-volunteer flag, so a mistaken scan can be undone by scanning again."""
+    cart.volunteer = not cart.volunteer
+    return "Volunteer drink: cart is FREE" if cart.volunteer else "Volunteer off: cart is paid again"
+
+
 # --- Main App Logic ---
 def handle_barcode(state, barcode, cart):
     """Returns (new_state, message, item_name, item_price, last_part)"""
     bc = barcode.upper()
     
     if state == AppState.IDLE:
-        if bc in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE):
+        if bc == VOLUNTEER_BARCODE:
+            return AppState.IDLE, "Scan your drink first, then VOLUNTEER.", None, None, None
+        if bc in COMMAND_BARCODES:
             return AppState.IDLE, "Cart is empty.", None, None, None
         part = get_item_by_barcode(barcode)
         if part:
@@ -1031,7 +1079,7 @@ def handle_barcode(state, barcode, cart):
         return AppState.IDLE, f"Unknown Barcode: {barcode}", None, None, None
 
     if state == AppState.QR_DISPLAY:
-        if bc in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE):
+        if bc in COMMAND_BARCODES:
             cart.clear()
             return AppState.IDLE, "Transaction Complete. Ready.", None, None, None
         return AppState.QR_DISPLAY, "Please finish payment. Scan CONFIRM to start new transaction.", None, None, None
@@ -1039,6 +1087,7 @@ def handle_barcode(state, barcode, cart):
     if state == AppState.SHOPPING:
         if bc == CANCEL_BARCODE: return AppState.CANCEL_CONFIRM, None, None, None, None
         elif bc == CONFIRM_BARCODE: return AppState.CHECKOUT_CONFIRM, None, None, None, None
+        elif bc == VOLUNTEER_BARCODE: return AppState.SHOPPING, toggle_volunteer(cart), None, None, None
         elif bc == REMOVE_BARCODE:
             removed = cart.remove_last_item()
             if cart.is_empty(): return AppState.IDLE, "Cart is now empty.", None, None, None
@@ -1057,7 +1106,7 @@ def handle_barcode(state, barcode, cart):
         if bc == CANCEL_BARCODE:
             cart.clear()
             return AppState.IDLE, "Transaction cancelled.", None, None, None
-        elif bc in (CONFIRM_BARCODE, REMOVE_BARCODE):
+        elif bc in (CONFIRM_BARCODE, REMOVE_BARCODE, VOLUNTEER_BARCODE):
             return AppState.SHOPPING, "Cancellation aborted. Cart unchanged.", None, None, None
         else:
             # Any product scan also resumes shopping
@@ -1077,6 +1126,10 @@ def handle_barcode(state, barcode, cart):
             return AppState.CANCEL_CONFIRM, None, None, None, None
         elif bc == REMOVE_BARCODE:
             return AppState.SHOPPING, "Checkout aborted. Continue scanning.", None, None, None
+        elif bc == VOLUNTEER_BARCODE:
+            # Stay on the confirm screen: it redraws with the new header and total.
+            toggle_volunteer(cart)
+            return AppState.CHECKOUT_CONFIRM, None, None, None, None
         else:
             part = get_item_by_barcode(barcode)
             if part:
@@ -1265,7 +1318,7 @@ def main():
             last_scan_time = current_time
 
             bc_upper = barcode.upper()
-            is_command = bc_upper in (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE)
+            is_command = bc_upper in COMMAND_BARCODES
 
             # Show immediate "SEARCHING" feedback on LCD while the API call happens,
             # but only for product scans (not commands which are handled instantly).
@@ -1284,6 +1337,14 @@ def main():
             if new_state == AppState.PROCESSING:
                 render(disp, AppState.PROCESSING, cart)
                 success, err_msg = remove_stock_from_inventree(cart)
+                if success and cart.volunteer:
+                    # Nothing to pay: thank them and go straight back to IDLE.
+                    render(disp, AppState.VOLUNTEER_DONE, cart)
+                    cart.clear()
+                    state = AppState.IDLE
+                    last_part = None
+                    if not disp: render(disp, state, cart)
+                    continue
                 if success:
                     new_state = AppState.QR_DISPLAY
                     msg = "Stock removed!"

@@ -174,6 +174,50 @@ def test_stock_removal():
             
     print("✓ Stock removal test passed!")
 
+def test_volunteer_flow():
+    """VOLUNTEER makes the whole cart free and books it as a volunteer drink."""
+    from unittest.mock import patch, MagicMock
+    import barcode_inventree as bi
+
+    print("\nTesting Volunteer Flow...")
+    drink = {'pk': 13, 'name': 'Ice Tea Peach'}
+    with patch.object(bi, 'get_item_by_barcode', side_effect=lambda b: dict(drink)), \
+         patch.object(bi, 'find_stock_item_with_quantity', return_value=(501, 24.0)), \
+         patch.object(bi, 'INVENTREE_TOKEN', 'test'), \
+         patch.object(bi, 'send_changelog_event') as events, \
+         patch.object(bi.API_SESSION, 'post') as post:
+        post.return_value = MagicMock(status_code=201)
+        cart = bi.ShoppingCart()
+        S = bi.AppState
+
+        state, msg, *_ = bi.handle_barcode(S.IDLE, 'VOLUNTEER', cart)
+        assert state == S.IDLE and 'first' in msg, "VOLUNTEER on an empty cart is refused"
+
+        state, *_ = bi.handle_barcode(S.IDLE, '8711327582156', cart)
+        state, *_ = bi.handle_barcode(state, '8711327582156', cart)
+        state, msg, *_ = bi.handle_barcode(state, 'VOLUNTEER', cart)
+        assert state == S.SHOPPING and cart.volunteer and 'FREE' in msg
+
+        state, *_ = bi.handle_barcode(state, 'VOLUNTEER', cart)
+        assert not cart.volunteer, "second scan undoes it"
+        state, *_ = bi.handle_barcode(state, 'CONFIRM', cart)
+        state, *_ = bi.handle_barcode(state, 'volunteer', cart)
+        assert state == S.CHECKOUT_CONFIRM and cart.volunteer, "works on the confirm screen too"
+        assert bi.CartSnapshot(cart).volunteer
+
+        state, *_ = bi.handle_barcode(state, 'CONFIRM', cart)
+        assert state == S.PROCESSING
+        ok, err = bi.remove_stock_from_inventree(cart)
+        assert ok, err
+        payload = post.call_args.kwargs['json']
+        assert payload['notes'].startswith('Volunteer drink via Interface-stock'), payload['notes']
+        assert payload['items'] == [{'pk': 501, 'quantity': 2.0}]
+        events.assert_called_once_with('volunteer', 'Ice Tea Peach', 2)
+
+        cart.clear()
+        assert not cart.volunteer, "clear() resets the flag for the next customer"
+    print("✓ Volunteer flow test passed!")
+
 def main():
     print("="*50)
     print("Shopping Cart System Test Suite")
@@ -183,6 +227,7 @@ def main():
     test_price_formatting()
     test_qr_generation()
     test_stock_removal()
+    test_volunteer_flow()
     
     print("\n" + "="*50)
     print("All tests completed!")
