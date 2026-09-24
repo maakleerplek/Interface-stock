@@ -158,6 +158,29 @@ The system automatically extracts categories from InvenTree and generates a desc
 - Example: "HTL Makerspace - drink - wood - electronics"
 - This helps identify what was purchased in bank statements
 
+## Planned: volunteer badge on an NFC reader
+
+Idea: a volunteer taps their badge at the scanner instead of scanning the shared VOLUNTEER code, so every volunteer drink is booked on a name. Not built yet; no reader has been bought. This is what we found out first (September 2026).
+
+### What works and what doesn't
+
+| Credential | Works with our own reader? | Why |
+|---|---|---|
+| Salto KS Keychain app on a phone | **No** | The app opens doors over Bluetooth LE, and over NFC only on Android (beta), with Salto's own encrypted protocol that only Salto locks understand. A normal NFC reader gets nothing it can tie to a person, and iPhones don't answer at all. |
+| Salto fob or card (MIFARE DESFire) | **Maybe** | Any 13.56 MHz reader can read the chip's serial number (UID) without Salto's keys. That only works if the installation does not use Salto's "random UID" option, which gives a new number on every read. Test with one real fob before buying anything. |
+| Our own NFC tags (NTAG215 stickers or cards, a few cents each) | **Yes** | Fixed UID. We hand one to each volunteer and register it once. Works on a keyring or as a sticker on the phone case. |
+| Salto KS cloud API (who opened which door) | Not usable here | Only for Salto partners, and it reports door openings, not who is standing at the scanner. |
+
+A UID is an identifier, not a password: anyone who knows it can copy it onto a blank tag. That is fine for "which volunteer took a free drink", not for anything that costs real money.
+
+### How it would plug in
+
+- **Reader:** a USB 13.56 MHz reader in *keyboard mode* (about €15–40, e.g. ACR122U-style or the generic "USB RFID reader 13.56 MHz, keyboard emulation" kind). It types the UID followed by Enter, exactly like the barcode scanner, so `barcode_inventree.py` already receives it through `read_scancode()`. Check that the model reads **DESFire** and **NTAG**, not only MIFARE Classic, and outputs hex.
+- **Who is who:** a small table from UID to volunteer name, kept on the server (not in git), for example `volunteers.json` next to `.env`.
+- **In the scan loop:** a scanned UID that is in the table works like `VOLUNTEER` (the whole cart is free), and the stock removal note gets the name: `Volunteer drink via Interface-stock (HTL) - <name>`. The analytics already recognise that note; the name would make a "per volunteer" view possible.
+- **Unknown UID:** show "Badge not registered" on the LCD and log the UID, so registering a new volunteer is: tap once, copy the UID from the log into the table.
+- **Test first:** before building anything, plug the reader into a laptop, open a text editor and tap a Salto fob twice. Two identical hex strings = usable. Different strings or nothing = only our own tags will work.
+
 ## Auto-Start on Boot
 
 The installation script automatically sets up a systemd service that runs the shopping system on boot.
