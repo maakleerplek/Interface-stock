@@ -22,7 +22,7 @@ fi
 cat > .env << EOF
 # INVENTREE URL AND TOKEN
 
-INVENTREE_URL=$(gh secret list | grep INVENTREE_URL > /dev/null && echo "http://10.72.3.68:80" || echo "")
+INVENTREE_URL=$(gh secret list | grep INVENTREE_URL > /dev/null && echo "http://10.72.1.246:80" || echo "")
 INVENTREE_TOKEN=$(gh secret list | grep INVENTREE_TOKEN > /dev/null && echo "# Secret stored in GitHub - contact admin" || echo "")
 
 # =============================================================================

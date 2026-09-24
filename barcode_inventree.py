@@ -28,7 +28,7 @@ except ImportError:
 
 # Load InvenTree credentials
 load_dotenv()
-INVENTREE_URL = os.getenv("INVENTREE_URL", "https://10.72.3.68:8443")
+INVENTREE_URL = os.getenv("INVENTREE_URL", "http://10.72.1.246")
 INVENTREE_TOKEN = os.getenv("INVENTREE_TOKEN")
 HTL_NAME = os.getenv("VITE_PAYMENT_NAME") or os.getenv("HTL_NAME", "HTL Makerspace")
 HTL_CODE = os.getenv("HTL_CODE", "HTL001")
