@@ -763,16 +763,51 @@ def show_item_on_lcd(disp, part_detail, cart):
             draw.text((SPLIT_X + 6, L_HEIGHT - 36), format_price(cart.get_total()), font=FONT_LG, fill=COL_ACCENT2)
     _show(disp, image)
 
-def show_confirmation_screen(disp, cart):
-    if not disp: return
+VOLUNTEER_OATH = ("By my honour and the power vested in me, I solemnly swear "
+                  "by the spirit of HTL that I worked well today and deserve a free drink.")
+
+
+def volunteer_oath_frame(cart):
+    """The volunteer checkout: an oath instead of a bill. Separate from the
+    frame so it can be previewed without the panel attached."""
     image, draw = _new_frame()
     _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_SUCCESS)
+    _center_text(draw, 8, "THE VOLUNTEER OATH", FONT_LG, fill=COL_BG)
+    draw.rectangle([BORDER_W, 37, L_WIDTH - BORDER_W - 1, 39], fill=COL_BORDER)
+
+    lines = _wrap(VOLUNTEER_OATH, 33)
+    y = 40 + (L_HEIGHT - 78 - 40 - len(lines) * 19) // 2  # centred between header and summary
+    for line in lines:
+        _center_text(draw, y, line, FONT_MD, fill=COL_FG)
+        y += 19
+
+    units = sum(q for _, q in cart.items)
+    summary = f"{units} DRINK{'S' if units != 1 else ''}  ·  " + format_price(cart.get_total())
+    draw.rectangle([BORDER_W, L_HEIGHT - 76, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
+    draw.rectangle([BORDER_W, L_HEIGHT - 78, L_WIDTH - BORDER_W - 1, L_HEIGHT - 76], fill=COL_BORDER)
+    draw.text((10, L_HEIGHT - 70), summary, font=FONT_MD, fill=COL_MUTED)
+    # Strike the price through: the spirit of HTL is paying.
+    sw = draw.textlength(summary, font=FONT_MD)
+    pw = draw.textlength(format_price(cart.get_total()), font=FONT_MD)
+    draw.line([10 + sw - pw, L_HEIGHT - 64, 10 + sw, L_HEIGHT - 64], fill=COL_ACCENT, width=2)
+    tw = draw.textlength("FREE", font=FONT_XL)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 75), "FREE", font=FONT_XL, fill=COL_SUCCESS)
+
+    draw.rectangle([BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_SUCCESS)
+    _center_text(draw, L_HEIGHT - 32, "SCAN CONFIRM TO SWEAR IT", FONT_MD, fill=COL_BG)
+    return image
+
+
+def show_confirmation_screen(disp, cart):
+    if not disp: return
     if cart.volunteer:
-        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_SUCCESS)
-        _center_text(draw, 8, "VOLUNTEER - FREE", FONT_LG, fill=COL_BG)
-    else:
-        draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
-        _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
+        _show(disp, volunteer_oath_frame(cart))
+        return
+    image, draw = _new_frame()
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT2)
+    _center_text(draw, 8, "CHECKOUT", FONT_LG, fill=COL_BG)
     draw.rectangle([BORDER_W, 37, L_WIDTH - BORDER_W - 1, 39], fill=COL_BORDER)
 
     y = 46
@@ -796,10 +831,9 @@ def show_confirmation_screen(disp, cart):
     draw.rectangle([BORDER_W, L_HEIGHT - 80, L_WIDTH - BORDER_W - 1, L_HEIGHT - 43], fill=COL_BLOCK)
     draw.rectangle([BORDER_W, L_HEIGHT - 82, L_WIDTH - BORDER_W - 1, L_HEIGHT - 80], fill=COL_BORDER)
     draw.text((10, L_HEIGHT - 78), "TOTAL", font=FONT_LG, fill=COL_FG)
-    total_str = "FREE" if cart.volunteer else format_price(cart.get_total())
+    total_str = format_price(cart.get_total())
     tw = draw.textlength(total_str, font=FONT_XL)
-    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL,
-              fill=COL_SUCCESS if cart.volunteer else COL_ACCENT2)
+    draw.text((L_WIDTH - tw - 10, L_HEIGHT - 79), total_str, font=FONT_XL, fill=COL_ACCENT2)
 
     _center_text(draw, L_HEIGHT - 55, "SCANNING CONFIRM WILL REMOVE FROM STOCK", FONT_SM, fill=COL_ACCENT)
     draw.rectangle([BORDER_W, L_HEIGHT - 40, L_WIDTH - BORDER_W - 1, L_HEIGHT - BORDER_W - 1], fill=COL_ACCENT)
@@ -893,7 +927,7 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
     elif state == AppState.QR_DISPLAY:
         show_payment_qr(disp, cart)
     elif state == AppState.VOLUNTEER_DONE:
-        show_message_screen(disp, "FREE", "Thanks for volunteering! Enjoy your drink.", color=COL_SUCCESS)
+        show_message_screen(disp, "OATH ACCEPTED", "The spirit of HTL thanks you. Enjoy your drink!", color=COL_SUCCESS)
 
         def _delayed_idle_after_thanks(d):
             time.sleep(3)
@@ -995,7 +1029,8 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
         print("Scan [CANCEL] again to discard cart, or scan anything else to resume.")
         
     elif state == AppState.CHECKOUT_CONFIRM:
-        print("--- CHECKOUT ---")
+        print("--- VOLUNTEER OATH ---" if cart.volunteer else "--- CHECKOUT ---")
+        if cart.volunteer: print(textwrap.fill(VOLUNTEER_OATH, 40))
         if message: print(f"*** {message} ***")
         for part, qty in cart.items:
             print(f"{qty}x {part.get('name', 'Unknown')}")
