@@ -82,6 +82,14 @@ REMOVE_BARCODE = "REMOVE"
 # a volunteer drink instead of a sale, so the analytics can tell them apart.
 VOLUNTEER_BARCODE = "VOLUNTEER"
 COMMAND_BARCODES = (CONFIRM_BARCODE, CANCEL_BARCODE, REMOVE_BARCODE, VOLUNTEER_BARCODE)
+# Page through the inventory on the TV. They only talk to the TV and never
+# touch the cart or the state, so they stay out of COMMAND_BARCODES.
+PAGE_PREV_BARCODE = "PAGE-PREV"
+PAGE_NEXT_BARCODE = "PAGE-NEXT"
+PAGE_BARCODES = {PAGE_PREV_BARCODE: "prev", PAGE_NEXT_BARCODE: "next"}
+# The TV cycles its pages only while nobody is shopping. We tell it on every
+# change and repeat it on this interval, so a silent Pi can't freeze the TV.
+KIOSK_HEARTBEAT_SECONDS = 30
 
 # AZERTY Scan Code Map (for evdev)
 SCAN_CODES = {
@@ -557,6 +565,42 @@ def send_changelog_event(action, item_name, quantity, price=None):
             API_SESSION.post(f"{TV_PRESENTATION_URL}/api/changelog", json=payload, timeout=3)
         except Exception: pass
     threading.Thread(target=_send, daemon=True).start()
+
+def send_tv_page(action):
+    if not TV_PRESENTATION_URL: return
+    def _send():
+        try:
+            API_SESSION.post(f"{TV_PRESENTATION_URL}/api/tv-page", json={"action": action}, timeout=3)
+        except Exception: pass
+    threading.Thread(target=_send, daemon=True).start()
+
+_kiosk_busy = None  # last state sent to the TV; None = nothing sent yet
+
+def send_kiosk_state(busy, cart_count):
+    if not TV_PRESENTATION_URL: return
+    def _send():
+        try:
+            payload = {"state": "busy" if busy else "idle", "cartCount": cart_count}
+            API_SESSION.post(f"{TV_PRESENTATION_URL}/api/kiosk-state", json=payload, timeout=3)
+        except Exception: pass
+    threading.Thread(target=_send, daemon=True).start()
+
+def report_kiosk_state(state, cart):
+    """Tell the TV when the kiosk goes from idle to busy or back. Busy is any
+    state but IDLE, so a cart waiting on the payment QR still holds the page."""
+    global _kiosk_busy
+    busy = state != AppState.IDLE
+    if busy != _kiosk_busy:
+        _kiosk_busy = busy
+        send_kiosk_state(busy, len(cart.items))
+
+def start_kiosk_heartbeat(cart):
+    def _beat():
+        while True:
+            time.sleep(KIOSK_HEARTBEAT_SECONDS)
+            if _kiosk_busy is not None:
+                send_kiosk_state(_kiosk_busy, len(cart.items))
+    threading.Thread(target=_beat, daemon=True).start()
 
 def remove_stock_from_inventree(cart):
     if not INVENTREE_TOKEN: return False, "INVENTREE_TOKEN not configured"
@@ -1320,6 +1364,8 @@ def main():
     last_part = None
 
     render(disp, state, cart)
+    report_kiosk_state(state, cart)
+    start_kiosk_heartbeat(cart)
     
     try:
         while True:
@@ -1329,6 +1375,7 @@ def main():
                     state = AppState.IDLE
                     last_part = None
                     render(disp, state, cart, "Timeout: Cart Cleared")
+                    report_kiosk_state(state, cart)
                     last_interaction = time.time()
 
             if scanner:
@@ -1353,6 +1400,9 @@ def main():
             last_scan_time = current_time
 
             bc_upper = barcode.upper()
+            if bc_upper in PAGE_BARCODES:
+                send_tv_page(PAGE_BARCODES[bc_upper])
+                continue
             is_command = bc_upper in COMMAND_BARCODES
 
             # Show immediate "SEARCHING" feedback on LCD while the API call happens,
@@ -1378,6 +1428,7 @@ def main():
                     cart.clear()
                     state = AppState.IDLE
                     last_part = None
+                    report_kiosk_state(state, cart)
                     if not disp: render(disp, state, cart)
                     continue
                 if success:
@@ -1391,6 +1442,7 @@ def main():
             if scanned_part: last_part = scanned_part
             
             render(disp, state, cart, msg, item_name, item_price, last_part)
+            report_kiosk_state(state, cart)
 
     except KeyboardInterrupt:
         print("\nExiting...")
