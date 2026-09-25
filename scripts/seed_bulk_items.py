@@ -1,4 +1,4 @@
-"""Put the weight items and the filament spools in InvenTree.
+"""Put the filament spools in InvenTree.
 
     INVENTREE_URL=http://10.72.3.68 INVENTREE_TOKEN=... python scripts/seed_bulk_items.py
 
@@ -7,9 +7,10 @@ only creates what is missing. Prices and stock are only set on a fresh part, so
 real values entered later in InvenTree are never overwritten. Barcodes and
 images are filled in on existing parts when they are still empty.
 
-Weight items are sold per 100 g block. Nobody counts the blocks, so each gets
-one stock item with a large quantity in an uncounted location: the scanner,
-the web till and the TV all expect stock, and this way they need no changes.
+Weight items (nuts & bolts per 100 g) are left out on purpose: HTL has not
+decided yet how to sell them. When it has, the plan was one part per 100 g
+block with a single uncounted stock item of 10000, so the scanner, the till
+and the TV (which shows that as infinite stock) need no changes.
 
 Filament: FormFutura 1 kg spools, bought at FILAMENT_COST and sold at
 FILAMENT_PRICE. The barcode is the EAN on the box and spool label, so scanning
@@ -26,15 +27,11 @@ S.headers["Authorization"] = f"Token {os.environ['INVENTREE_TOKEN']}"
 S.verify = False
 
 IMAGES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filament_images")
-BULK_QTY = 10000
 FILAMENT_COST = 8.44
 FILAMENT_PRICE = 20.00
 
 # (category, location, [(name, IPN, sale price, purchase price, stock, barcode)])
 ITEMS = [
-    ("Per gewicht", "Bulk (niet geteld)", [
-        ("Nuts & bolts (100 g)", "BULK-NB-100G", 5.00, None, BULK_QTY, None),
-    ]),
     ("Filament", "Filament-rek", [
         (f"{name} (1 kg)", ipn, FILAMENT_PRICE, FILAMENT_COST, qty, ean)
         for name, ipn, qty, ean in [
