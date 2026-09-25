@@ -303,7 +303,7 @@ _THUMBNAIL_CACHE: dict = {}
 # --- InvenTree API Functions ---
 def fetch_part_details(part_id):
     if not part_id: return None
-    url = f"{INVENTREE_URL}/api/part/{part_id}/"
+    url = f"{INVENTREE_URL}/api/part/{part_id}/?category_detail=true"
     try:
         response = API_SESSION.get(url, timeout=5)
         if response.status_code == 200: return response.json()
@@ -468,7 +468,24 @@ def extract_category(part_detail):
     path = part_detail.get('category_path')
     if path and isinstance(path, str): return path.split('/')[-1].lower()
     if isinstance(part_detail.get('category_name'), str): return part_detail.get('category_name').lower()
+    # The /api/barcode/ and /api/part/<pk>/ lookups only return the category pk,
+    # and that is what ends up in the barcode cache, so resolve it by name here.
+    name = fetch_category_name(part_detail.get('category'))
+    if name: return name.lower()
     return "uncategorized"
+
+_CATEGORY_NAMES = {}
+
+def fetch_category_name(category_pk):
+    if not isinstance(category_pk, int): return None
+    if category_pk in _CATEGORY_NAMES: return _CATEGORY_NAMES[category_pk]
+    try:
+        r = API_SESSION.get(f"{INVENTREE_URL}/api/part/category/{category_pk}/", timeout=5)
+        if r.status_code == 200:
+            _CATEGORY_NAMES[category_pk] = r.json().get('name')
+            return _CATEGORY_NAMES[category_pk]
+    except Exception: pass
+    return None
 
 def get_image(part_detail, size=(80, 80)):
     img_path = part_detail.get('thumbnail') or part_detail.get('image')
