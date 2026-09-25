@@ -120,7 +120,7 @@ The `barcode_inventree.py` script is a complete shopping cart system with InvenT
 
    Optional variables:
    - `TV_PRESENTATION_URL` - URL of the tv-presentation server (e.g. `http://10.72.3.141:8083`). When set, each successful checkout sends a `POST /api/changelog` event so the TV display shows a live "Recent activity" feed. Leave empty to disable.
-     The scanner also drives the TV's inventory pages: `PAGE-PREV` and `PAGE-NEXT` (QR codes on the TV) send `POST /api/tv-page`, and every switch between idle and shopping sends `POST /api/kiosk-state` (repeated every 30 s as a heartbeat). The TV cycles through its pages only while the kiosk is idle.
+     The scanner also drives the TV's inventory pages, which run in Chromium on this same Pi: `PAGE-PREV` and `PAGE-NEXT` (QR codes on the TV) press PageUp/PageDown in that browser with `xdotool`, and every switch between idle and shopping presses F14/F13 (repeated every 30 s as a heartbeat). No server round trip, so the page switches at once. The TV cycles through its pages only while the kiosk is idle. Needs `xdotool` (`sudo apt install xdotool`).
 
 2. **Install dependencies**:
    ```bash

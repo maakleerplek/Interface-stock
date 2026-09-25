@@ -8,6 +8,8 @@ import textwrap
 import requests
 import threading
 import traceback
+import subprocess
+import shutil
 import fcntl
 import qrcode
 import queue
@@ -88,7 +90,7 @@ PAGE_PREV_BARCODE = "PAGE-PREV"
 PAGE_NEXT_BARCODE = "PAGE-NEXT"
 PAGE_BARCODES = {PAGE_PREV_BARCODE: "prev", PAGE_NEXT_BARCODE: "next"}
 # The TV cycles its pages only while nobody is shopping. We tell it on every
-# change and repeat it on this interval, so a silent Pi can't freeze the TV.
+# change and repeat it on this interval, so a stuck state can't freeze the TV.
 KIOSK_HEARTBEAT_SECONDS = 30
 
 # AZERTY Scan Code Map (for evdev)
@@ -583,24 +585,33 @@ def send_changelog_event(action, item_name, quantity, price=None):
         except Exception: pass
     threading.Thread(target=_send, daemon=True).start()
 
-def send_tv_page(action):
-    if not TV_PRESENTATION_URL: return
-    def _send():
+# The TV page runs in Chromium on this same Pi. Instead of a round trip over
+# the server, press a key in that browser; the page (Tv-Presentation
+# hooks/useTvPage.ts) reacts to it at once. No X display (e.g. testing on a
+# laptop without xdotool) just means no TV control.
+TV_KEYS = {"next": "Next", "prev": "Prior", "busy": "F13", "idle": "F14"}
+_XDOTOOL = shutil.which("xdotool")
+_X_ENV = {**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":0"),
+          "XAUTHORITY": os.environ.get("XAUTHORITY", os.path.expanduser("~/.Xauthority"))}
+
+def press_tv_key(name):
+    if not _XDOTOOL: return
+    def _press():
         try:
-            API_SESSION.post(f"{TV_PRESENTATION_URL}/api/tv-page", json={"action": action}, timeout=3)
+            subprocess.run(
+                [_XDOTOOL, "search", "--onlyvisible", "--class", "chromium",
+                 "windowactivate", "--sync", "key", "--clearmodifiers", TV_KEYS[name]],
+                env=_X_ENV, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception: pass
-    threading.Thread(target=_send, daemon=True).start()
+    threading.Thread(target=_press, daemon=True).start()
+
+def send_tv_page(action):
+    press_tv_key(action)
 
 _kiosk_busy = None  # last state sent to the TV; None = nothing sent yet
 
 def send_kiosk_state(busy, cart_count):
-    if not TV_PRESENTATION_URL: return
-    def _send():
-        try:
-            payload = {"state": "busy" if busy else "idle", "cartCount": cart_count}
-            API_SESSION.post(f"{TV_PRESENTATION_URL}/api/kiosk-state", json=payload, timeout=3)
-        except Exception: pass
-    threading.Thread(target=_send, daemon=True).start()
+    press_tv_key("busy" if busy else "idle")
 
 def report_kiosk_state(state, cart):
     """Tell the TV when the kiosk goes from idle to busy or back. The payment
