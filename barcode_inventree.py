@@ -586,10 +586,11 @@ def send_kiosk_state(busy, cart_count):
     threading.Thread(target=_send, daemon=True).start()
 
 def report_kiosk_state(state, cart):
-    """Tell the TV when the kiosk goes from idle to busy or back. Busy is any
-    state but IDLE, so a cart waiting on the payment QR still holds the page."""
+    """Tell the TV when the kiosk goes from idle to busy or back. The payment
+    QR counts as idle: the sale is booked by then, and the kiosk only leaves
+    that screen on the next scan, which could leave the TV paused for hours."""
     global _kiosk_busy
-    busy = state != AppState.IDLE
+    busy = state not in (AppState.IDLE, AppState.QR_DISPLAY)
     if busy != _kiosk_busy:
         _kiosk_busy = busy
         send_kiosk_state(busy, len(cart.items))
