@@ -654,7 +654,9 @@ class ShoppingCart:
     def get_categories(self): return sorted(set(extract_category(p) for p, _ in self.items))
     def get_description(self):
         cats = self.get_categories()
-        return f"{HTL_NAME}: " + ",".join(cats) if cats else f"{HTL_NAME} - Purchase"
+        desc = f"{HTL_NAME}: " + ", ".join(cats) if cats else f"{HTL_NAME} - Purchase"
+        # EPC QR remittance text is capped at 140 characters; banking apps reject longer.
+        return desc[:140]
     def clear(self):
         self.items = []
         self.volunteer = False
