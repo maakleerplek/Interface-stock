@@ -47,6 +47,14 @@ ITEMS = [
             ("rTPU 90A Traffic Black", "FIL-TPU90-BLK", 1, "8720847069733"),
             ("rTPU 95A Traffic Black", "FIL-TPU95-BLK", 2, "8720847069757"),
         ]
+    ] + [
+        (f"{name} (750 g)", ipn, FILAMENT_PRICE, FILAMENT_COST, qty, ean)
+        for name, ipn, qty, ean in [
+            ("Refill PLA Grey Beige", "FIL-PLA-GBEI", 1, "8720629063225"),
+            ("Refill PLA Signal Violet", "FIL-PLA-SVIO", 3, "8720629063294"),
+            ("Refill PLA Army Green", "FIL-PLA-AGRN", 2, "8720629063010"),
+            ("Refill PETG Zinc Yellow", "FIL-PETG-ZYEL", 1, "8720847058874"),
+        ]
     ]),
 ]
 
