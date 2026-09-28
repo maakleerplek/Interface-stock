@@ -93,17 +93,21 @@ PAGE_BARCODES = {PAGE_PREV_BARCODE: "prev", PAGE_NEXT_BARCODE: "next"}
 # change and repeat it on this interval, so a stuck state can't freeze the TV.
 KIOSK_HEARTBEAT_SECONDS = 30
 
-# AZERTY Scan Code Map (for evdev)
+# Scan codes the scanner sends (US QWERTY positions) -> characters. Scancode 12
+# is the minus key: '-' in the IPNs on the TV's QR codes (FIL-PLA-DBLU), '_'
+# only with Shift; see SHIFTED.
 SCAN_CODES = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
-    12: '_', 13: '=', 
+    12: '-', 13: '=', 
     16: 'Q', 17: 'W', 18: 'E', 19: 'R', 20: 'T', 21: 'Y', 22: 'U', 23: 'I', 24: 'O', 25: 'P',
     30: 'A', 31: 'S', 32: 'D', 33: 'F', 34: 'G', 35: 'H', 36: 'J', 37: 'K', 38: 'L',
     44: 'Z', 45: 'X', 46: 'C', 47: 'V', 48: 'B', 49: 'N', 50: 'M',
     51: ',', 52: '.', 53: '/', 57: ' ', 
 }
+SHIFTED = {12: '_', 13: '+'}
 if HAS_EVDEV:
     SCAN_CODES[ecodes.KEY_ENTER] = '\n'
+    SHIFT_KEYS = {ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT}
 
 # Fallback character map for manual terminal input
 AZERTY_MAP = {
@@ -1263,29 +1267,50 @@ def find_scanner():
 
 import select
 
+# A code being typed by the scanner, kept across read_scancode() calls. The
+# scanner pauses now and then inside a long QR code; a buffer that lived only
+# for one 50 ms poll dropped the start of it ("FIL-PLA-MYEL" arrived as
+# "_MYEL"). Only a real silence means the rest of a code was lost.
+_scan_buffer = ""
+_scan_last_key = 0.0
+_scan_shift = False
+_SCAN_GAP = 1.0  # seconds without a key before a half-read code is dropped
+
+
 def read_scancode(device):
     """Read one complete barcode from the evdev device.
     Uses a short 50 ms poll interval so the main loop stays responsive
-    (timeout check, etc.) without busy-waiting.
+    (timeout check, etc.) without busy-waiting. Returns "" while a code is
+    still coming in, the code once Enter arrives, None if the device is gone.
     """
-    barcode = ""
+    global _scan_buffer, _scan_last_key, _scan_shift
     try:
         while True:
             r, _, _ = select.select([device], [], [], 0.05)  # 50 ms poll
             if not r:
-                # Nothing ready — return empty so the caller can do housekeeping
+                if _scan_buffer and time.time() - _scan_last_key > _SCAN_GAP:
+                    print(f"Dropped incomplete scan: {_scan_buffer!r}")
+                    _scan_buffer = ""
                 return ""
             for event in device.read():
-                if event.type == ecodes.EV_KEY:
-                    data = evdev.categorize(event)
-                    if data.keystate == 1:  # key-down only
-                        if data.scancode == ecodes.KEY_ENTER:
-                            res = barcode.strip()
-                            barcode = ""
-                            if res: return res
-                        else:
-                            char = SCAN_CODES.get(data.scancode)
-                            if char is not None: barcode += char
+                if event.type != ecodes.EV_KEY:
+                    continue
+                data = evdev.categorize(event)
+                if data.scancode in SHIFT_KEYS:
+                    _scan_shift = data.keystate != 0  # down or held
+                    continue
+                if data.keystate != 1:  # key-down only
+                    continue
+                _scan_last_key = time.time()
+                if data.scancode == ecodes.KEY_ENTER:
+                    res = _scan_buffer.strip()
+                    _scan_buffer = ""
+                    if res:
+                        return res
+                    continue
+                char = (SHIFTED.get(data.scancode) if _scan_shift else None) or SCAN_CODES.get(data.scancode)
+                if char is not None:
+                    _scan_buffer += char
     except Exception:
         return None
 
