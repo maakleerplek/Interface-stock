@@ -20,6 +20,10 @@ flags=(
    --disable-sync
    --metrics-recording-only
    --no-first-run
+   # Without this the GPU process asks X for the screen list on every frame,
+   # and X re-reads the TV's EDID each time (~25x a second): an Xorg.0.log
+   # of GBs and a busy CPU. See scripts/kiosk-watchdog.sh.
+   --disable-gpu-vsync
 )
 
 # Reload 20s after launch to clear any initial white screen

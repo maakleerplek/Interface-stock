@@ -49,7 +49,18 @@ if ! systemctl is-enabled --quiet interface-stock-update.timer 2>/dev/null; then
     echo "Timer installed: will auto-update daily at 01:00."
 fi
 
-# 5. Install or refresh the kiosk watchdog (blank TV page, Wi-Fi, full disk)
+# 5. Chromium's start script (flags) lives in /opt; copy it when it changed and
+#    restart Chromium so the flags apply (FullPageOS starts it again).
+SRC="$INSTALL_DIR/scripts/start_chromium_browser"
+DST=/opt/custompios/scripts/start_chromium_browser
+if [ -f "$DST" ] && ! cmp -s "$SRC" "$DST"; then
+    echo ""
+    echo "--- Updating Chromium start script ---"
+    sudo cp "$SRC" "$DST" && sudo chmod +x "$DST"
+    pkill -x chromium || true
+fi
+
+# 6. Install or refresh the kiosk watchdog (blank TV page, Wi-Fi, full disk)
 echo ""
 echo "--- Kiosk watchdog ---"
 bash "$INSTALL_DIR/scripts/install-watchdog.sh"
