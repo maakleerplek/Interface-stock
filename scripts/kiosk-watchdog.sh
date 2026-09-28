@@ -67,7 +67,8 @@ on_at=$(last tv-on.timer); off_at=$(last tv-off.timer)
 if [ "${on_at:-0}" -gt "${off_at:-0}" ] && [ -e /dev/cec0 ]; then
     pwr=$(timeout 10 cec-ctl -d /dev/cec0 --playback --to 0 --give-device-power-status 2>/dev/null \
           | sed -n 's/.*pwr-state: \([a-z-]*\).*/\1/p')
-    if [ "$pwr" = standby ]; then
+    # Samsung reports "to-standby" for a long while after going off.
+    if [ "$pwr" = standby ] || [ "$pwr" = to-standby ]; then
         log "TV in standby during opening hours: switching it on over CEC"
         act "$(dirname "$0")/tv-on.sh"
     fi
