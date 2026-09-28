@@ -1,0 +1,7 @@
+[Unit]
+Description=Kiosk watchdog: blank TV page, missing Wi-Fi, full disk
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/Interface-stock/scripts/kiosk-watchdog.sh

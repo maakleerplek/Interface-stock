@@ -158,6 +158,10 @@ sudo systemctl enable --now tv-on.timer tv-off.timer
 echo "TV timers installed: on at 10:00, off at 12:00 daily."
 
 echo ""
+echo "--- Setting up the kiosk watchdog (every 2 min) ---"
+bash "$INSTALL_DIR/scripts/install-watchdog.sh"
+
+echo ""
 echo "--- Setting up daily auto-update timer (01:00) ---"
 CURRENT_USER=$(whoami)
 sed -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \

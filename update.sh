@@ -49,6 +49,11 @@ if ! systemctl is-enabled --quiet interface-stock-update.timer 2>/dev/null; then
     echo "Timer installed: will auto-update daily at 01:00."
 fi
 
+# 5. Install or refresh the kiosk watchdog (blank TV page, Wi-Fi, full disk)
+echo ""
+echo "--- Kiosk watchdog ---"
+bash "$INSTALL_DIR/scripts/install-watchdog.sh"
+
 echo ""
 echo "=== Update complete ==="
 echo ""
