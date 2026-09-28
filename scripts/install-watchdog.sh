@@ -15,6 +15,11 @@ if systemctl list-unit-files xorg-log-cap.timer >/dev/null 2>&1; then
     sudo rm -f /etc/systemd/system/xorg-log-cap.timer /etc/systemd/system/xorg-log-cap.service
 fi
 
+# Cap the journal: the SD card is small and one noisy service fills it.
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=100M\n' | sudo tee /etc/systemd/journald.conf.d/50-kiosk-size.conf > /dev/null
+sudo systemctl restart systemd-journald
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now kiosk-watchdog.timer
 echo "Kiosk watchdog installed: runs every 2 minutes (journalctl -t kiosk-watchdog)."

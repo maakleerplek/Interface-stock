@@ -9,7 +9,11 @@
 #  2. Wi-Fi: after a warm reboot the Wi-Fi chip sometimes fails to load its
 #     firmware ("brcmfmac: Downloaded RAM image is corrupted") and wlan0 never
 #     appears. Reloading the driver loads the firmware again.
-#  3. TV page: Chromium on the heavy TV page sometimes shows a plain white
+#  3. TV power: Samsung's Auto Power Off puts the TV in standby after a few
+#     hours without the remote, even with a picture coming in. During opening
+#     hours (after tv-on.timer fired, before tv-off.timer) it is switched back
+#     on over HDMI-CEC. Turning Auto Power Off off in the TV menu avoids it.
+#  4. TV page: Chromium on the heavy TV page sometimes shows a plain white
 #     screen (out of memory). A screenshot with no variation means the page is
 #     gone: F5 first, then restart Chromium, then reboot (at most every 6 h).
 #
@@ -53,7 +57,23 @@ if [ ! -e /sys/class/net/wlan0 ]; then
     exit 0   # no network: the TV page cannot load anyway
 fi
 
-# --- 3. TV page --------------------------------------------------------------
+# --- 3. TV power ------------------------------------------------------------
+# Wall-clock time of a timer's last run; Persistent= timers keep it across
+# reboots. 0 if it never ran.
+last() { local t; t=$(systemctl show -P LastTriggerUSec "$1" 2>/dev/null)
+         [ -n "$t" ] && [ "$t" != n/a ] && date -d "$t" +%s 2>/dev/null || echo 0; }
+on_at=$(last tv-on.timer); off_at=$(last tv-off.timer)
+# Opening hours = tv-on ran more recently than tv-off.
+if [ "${on_at:-0}" -gt "${off_at:-0}" ] && [ -e /dev/cec0 ]; then
+    pwr=$(timeout 10 cec-ctl -d /dev/cec0 --playback --to 0 --give-device-power-status 2>/dev/null \
+          | sed -n 's/.*pwr-state: \([a-z-]*\).*/\1/p')
+    if [ "$pwr" = standby ]; then
+        log "TV in standby during opening hours: switching it on over CEC"
+        act "$(dirname "$0")/tv-on.sh"
+    fi
+fi
+
+# --- 4. TV page --------------------------------------------------------------
 URL=$(/opt/custompios/scripts/get_url 2>/dev/null)
 if ! curl -sf -o /dev/null --max-time 15 "$URL"; then
     rm -f "$STATE/blank"   # server down: not something a refresh fixes
