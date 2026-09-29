@@ -14,6 +14,11 @@ from PIL import Image
 WIDTH  = 240
 HEIGHT = 320
 
+# The ILI9341 is rated for ~10 MHz writes. 40 MHz over jumper wires corrupted
+# the odd command byte, which can leave the panel blank white while every
+# write still "succeeds". A full frame at 16 MHz is still only ~80 ms.
+SPI_HZ = 16000000
+
 
 class LCD_2inch4:
     def __init__(self):
@@ -32,9 +37,11 @@ class LCD_2inch4:
         GPIO.setup(self.DC_PIN,  GPIO.OUT)
         GPIO.setup(self.BL_PIN,  GPIO.OUT)
         GPIO.output(self.BL_PIN, GPIO.HIGH)
+        if self._spi is not None:
+            self._spi.close()  # Init() runs again on every hard re-init
         self._spi = spidev.SpiDev()
         self._spi.open(0, 0)
-        self._spi.max_speed_hz = 40000000
+        self._spi.max_speed_hz = SPI_HZ
         self._spi.mode = 0b00
 
     def _cmd(self, cmd):
@@ -54,9 +61,13 @@ class LCD_2inch4:
         GPIO.output(self.RST_PIN, GPIO.LOW);  time.sleep(0.01)
         GPIO.output(self.RST_PIN, GPIO.HIGH); time.sleep(0.01)
 
-    def Init(self):
-        self._module_init()
-        self._reset()
+    def Init(self, hard_reset=True):
+        """Send the init sequence. hard_reset=False only rewrites the
+        registers: GRAM survives, so a healthy panel doesn't flicker, and a
+        panel that silently lost its settings gets them back."""
+        if hard_reset or self._spi is None:
+            self._module_init()
+            self._reset()
 
         self._cmd(0x11)  # Sleep out
 

@@ -75,6 +75,15 @@ LCD_REINIT = threading.Event()
 # screen exactly as it was instead of guessing at the app state.
 LAST_RENDER = None
 
+# The panel can lose its registers without any brownout (noise on the SPI
+# wires) and turn white, and SPI can't read back to notice. So while nobody is
+# scanning we re-send the registers plus the last frame every LCD_REFRESH_S
+# (invisible on a healthy panel) and do a full hardware reset every
+# LCD_HARD_RESET_S. A dead screen heals itself within half a minute.
+LCD_REFRESH_S = 30
+LCD_HARD_RESET_S = 15 * 60
+_LAST_FRAME = None
+
 # Special barcodes for checkout confirmation and cancellation
 CONFIRM_BARCODE = "CONFIRM"
 CANCEL_BARCODE = "CANCEL"
@@ -203,7 +212,18 @@ def _show(disp, image):
             print("[lcd] panel re-initialised after undervoltage")
         except Exception as e:
             print(f"[lcd] re-init failed: {e}")
-    disp.ShowImage(image.rotate(90, expand=True))
+    global _LAST_FRAME
+    _LAST_FRAME = image.rotate(90, expand=True)
+    disp.ShowImage(_LAST_FRAME)
+
+def _refresh_panel(disp, hard_reset):
+    """Re-init the panel and push the last frame again (lcd_worker only)."""
+    if not disp or _LAST_FRAME is None: return
+    try:
+        disp.Init(hard_reset=hard_reset)
+        disp.ShowImage(_LAST_FRAME)
+    except Exception as e:
+        print(f"[lcd] periodic refresh failed: {e}")
 
 def _border_rect(draw, box, fill=None, border_color=None, width=BORDER_W):
     if fill: draw.rectangle(box, fill=fill)
@@ -1073,8 +1093,16 @@ def undervoltage_watchdog(poll_s=3):
 
 
 def lcd_worker():
+    last_hard = time.monotonic()
     while True:
-        task = LCD_QUEUE.get()
+        try:
+            task = LCD_QUEUE.get(timeout=LCD_REFRESH_S)
+        except queue.Empty:
+            if LAST_RENDER:
+                hard = time.monotonic() - last_hard >= LCD_HARD_RESET_S
+                if hard: last_hard = time.monotonic()
+                _refresh_panel(LAST_RENDER[0], hard)
+            continue
         try:
             disp, state, cart_snap, message, item_name, item_price, last_part = task
             _do_lcd_render(disp, state, cart_snap, message, item_name, item_price, last_part)
