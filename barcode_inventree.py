@@ -4,6 +4,7 @@ import time
 import json
 import glob
 import atexit
+import re
 import textwrap
 import requests
 import threading
@@ -679,6 +680,41 @@ def remove_stock_from_inventree(cart):
         else: return False, f"API Error: {response.status_code}"
     except Exception as e: return False, f"Exception: {str(e)}"
 
+# --- Cellar storage ---
+# Stock-management-frontend's Storage tab (laser/storage.py) stores each item
+# someone leaves in the cellar as one stock item of the part "Tijdelijke
+# opslag", with its code (K-042) as batch. The code is on the item's tape as
+# text and QR. Scanning it here checks the item out: it leaves InvenTree.
+STORAGE_PART = "Tijdelijke opslag"
+STORAGE_CODE_RE = re.compile(r"^K-\d+$")
+STORAGE_DONE_PREFIX = "Checked out"
+
+
+def check_out_stored_item(code):
+    """Remove the stored item with this code from stock. Returns (ok, message);
+    a failed message contains "ERROR" so the LCD shows it as a warning."""
+    try:
+        r = API_SESSION.get(f"{INVENTREE_URL}/api/stock/",
+                            params={"batch": code, "in_stock": "true", "part_detail": "true"}, timeout=5)
+        if r.status_code != 200:
+            return False, f"ERROR: InvenTree answered {r.status_code}. Try again."
+        data = r.json()
+        results = data if isinstance(data, list) else data.get("results", [])
+        items = [i for i in results if (i.get("part_detail") or {}).get("name") == STORAGE_PART
+                 and i.get("batch") == code]
+        if not items:
+            return False, f"ERROR: {code} is not in storage. Already checked out?"
+        item = items[0]
+        r = API_SESSION.post(f"{INVENTREE_URL}/api/stock/remove/", json={
+            "items": [{"pk": item["pk"], "quantity": float(item.get("quantity") or 1)}],
+            "notes": f"Picked up from temporary storage at the kiosk ({code})"}, timeout=10)
+        if r.status_code not in (200, 201):
+            return False, f"ERROR: InvenTree answered {r.status_code}. Try again."
+    except Exception:
+        return False, "ERROR: Cannot reach InvenTree. Try again."
+    return True, f"{STORAGE_DONE_PREFIX}: {code}. Take it home!"
+
+
 # --- Shopping Cart Management ---
 class ShoppingCart:
     def __init__(self):
@@ -966,6 +1002,13 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
                 time.sleep(1.8)
                 LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
             threading.Thread(target=_delayed_idle, args=(disp,), daemon=True).start()
+        elif message and message.startswith(STORAGE_DONE_PREFIX):
+            show_message_screen(disp, "CHECKED OUT", message, color=COL_SUCCESS)
+
+            def _delayed_idle_after_pickup(d):
+                time.sleep(3)
+                LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
+            threading.Thread(target=_delayed_idle_after_pickup, args=(disp,), daemon=True).start()
         else:
             show_idle_screen(disp)
     elif state == AppState.SHOPPING:
@@ -1184,6 +1227,9 @@ def handle_barcode(state, barcode, cart):
             return AppState.IDLE, "Scan your drink first, then VOLUNTEER.", None, None, None
         if bc in COMMAND_BARCODES:
             return AppState.IDLE, "Cart is empty.", None, None, None
+        if STORAGE_CODE_RE.match(bc):
+            _, msg = check_out_stored_item(bc)
+            return AppState.IDLE, msg, None, None, None
         part = get_item_by_barcode(barcode)
         if part:
             added, err = try_add_to_cart(cart, part)
@@ -1207,6 +1253,8 @@ def handle_barcode(state, barcode, cart):
             if cart.is_empty(): return AppState.IDLE, "Cart is now empty.", None, None, None
             msg = f"Removed {removed.get('name')}" if removed else "Nothing to remove."
             return AppState.SHOPPING, msg, None, None, None
+        elif STORAGE_CODE_RE.match(bc):
+            return AppState.SHOPPING, f"ERROR: Pay or cancel the cart first, then scan {bc}.", None, None, None
         else:
             part = get_item_by_barcode(barcode)
             if part:
