@@ -83,7 +83,7 @@ fi
 
 # Mean brightness and spread of a tiny grayscale screenshot. The TV page has
 # a spread around 0.18; a white (or black) screen is close to 0.
-read -r mean sd < <(import -silent -window root -resize 64x36! -colorspace gray \
+read -r mean sd < <(timeout 20 import -silent -window root -resize 64x36! -colorspace gray \
     -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null)
 [ -n "$sd" ] || exit 0   # X not up yet
 
@@ -93,15 +93,18 @@ if awk -v sd="$sd" 'BEGIN { exit !(sd < 0.02) }'; then
     case $n in
         1)
             log "TV page blank (mean=$mean sd=$sd): pressing F5"
-            win=$(xdotool search --onlyvisible --class chromium | head -1)
-            [ -n "$win" ] && act xdotool windowactivate --sync "$win" key --window "$win" F5
+            win=$(timeout 10 xdotool search --onlyvisible --class chromium | head -1)
+            [ -n "$win" ] && act timeout 10 xdotool windowactivate --sync "$win" key --window "$win" F5
             ;;
         2)
             # run_onepageos starts Chromium again as soon as it is gone.
             log "TV page still blank after F5: restarting Chromium"
             act pkill -x chromium
             ;;
-        4)
+        3) ;;   # give the restarted Chromium one more round
+        *)
+            # Not only 4: once the 6 h guard skipped a reboot, n kept counting
+            # past 4 and a later reboot never came.
             if [ "$(age "$STAMPS/reboot")" -ge 21600 ]; then
                 log "TV page still blank after a Chromium restart: rebooting"
                 act touch "$STAMPS/reboot"

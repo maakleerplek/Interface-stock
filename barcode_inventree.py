@@ -4,6 +4,7 @@ import time
 import json
 import glob
 import atexit
+import signal
 import textwrap
 import requests
 import threading
@@ -74,6 +75,10 @@ LCD_REINIT = threading.Event()
 # The most recent render task, so the undervoltage watchdog can repaint the
 # screen exactly as it was instead of guessing at the app state.
 LAST_RENDER = None
+# Bumped by every render(). A follow-up frame scheduled with _render_later()
+# is dropped when a newer render came in meanwhile, so a 3 s-old IDLE frame
+# can no longer replace the next customer's cart.
+_RENDER_GEN = 0
 
 # The panel can lose its registers without any brownout (noise on the SPI
 # wires) and turn white, and SPI can't read back to notice. So while nobody is
@@ -297,8 +302,14 @@ class BarcodeCache:
         with self._lock:
             if not self._dirty: return
             try:
-                with open(self.cache_file, "w") as f:
+                # Write a temp file and swap it in: a power cut mid-write
+                # used to leave half a JSON file, and load() then started empty.
+                tmp = self.cache_file + ".tmp"
+                with open(tmp, "w") as f:
                     json.dump(self.cache, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, self.cache_file)
                 self._dirty = False
                 self._last_save = time.time()
             except Exception: pass
@@ -344,11 +355,18 @@ def fetch_part_details(part_id):
     except Exception: pass
     return None
 
+# Barcodes that found nothing, with the time of the miss. A misread or unknown
+# code otherwise fires all fallback requests again on every re-scan.
+_MISSES: dict = {}
+_MISS_TTL = 60
+
+
 def get_item_by_barcode(barcode):
     cached_part = BARCODE_CACHE.get(barcode)
     if cached_part: return cached_part
 
     if not INVENTREE_TOKEN: return None
+    if time.time() - _MISSES.get(barcode, 0) < _MISS_TTL: return None
     
     url = f"{INVENTREE_URL}/api/barcode/"
     try:
@@ -389,7 +407,8 @@ def get_item_by_barcode(barcode):
 
     def _try_part_barcode(v):
         try:
-            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?barcode={v}&category_detail=true", timeout=5)
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/",
+                               params={"barcode": v, "category_detail": "true", "limit": 5}, timeout=5)
             if r.status_code != 200: return None
             data = r.json()  # parse once — avoids double JSON decode
             results = data if isinstance(data, list) else data.get("results", [])
@@ -401,7 +420,8 @@ def get_item_by_barcode(barcode):
 
     def _try_part_ipn(v):
         try:
-            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/?IPN={v}&category_detail=true", timeout=5)
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/part/",
+                               params={"IPN": v, "category_detail": "true", "limit": 5}, timeout=5)
             if r.status_code != 200: return None
             data = r.json()  # parse once
             results = data if isinstance(data, list) else data.get("results", [])
@@ -413,9 +433,11 @@ def get_item_by_barcode(barcode):
 
     def _try_stock_barcode():
         try:
-            r = API_SESSION.get(f"{INVENTREE_URL}/api/stock/?barcode={barcode}&part_detail=true", timeout=5)
+            r = API_SESSION.get(f"{INVENTREE_URL}/api/stock/",
+                               params={"barcode": barcode, "part_detail": "true", "limit": 5}, timeout=5)
             if r.status_code != 200: return None
-            results = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+            data = r.json()
+            results = data if isinstance(data, list) else data.get("results", [])
             for item in results:
                 if item.get("barcode") == barcode:
                     stock_item_pk = item.get("pk")
@@ -443,6 +465,8 @@ def get_item_by_barcode(barcode):
             BARCODE_CACHE.set(barcode, result)
             return result
 
+    _MISSES[barcode] = time.time()
+    if len(_MISSES) > 200: _MISSES.clear()
     return None
 
 # Selling price per part pk, from InvenTree's sale price breaks. pricing_max is
@@ -458,11 +482,19 @@ def refresh_sale_prices(force=False):
     global _SALE_PRICES, _SALE_PRICES_FETCHED
     if not force and (time.time() - _SALE_PRICES_FETCHED) < _SALE_PRICE_TTL:
         return
+    # Count a failure as a fetch too: with InvenTree down, every price lookup
+    # (a dozen per render) used to wait out its own 5 s timeout.
+    _SALE_PRICES_FETCHED = time.time() - _SALE_PRICE_TTL + 30
+    results = []
+    url = f"{INVENTREE_URL}/api/part/sale-price/?limit=500"
     try:
-        r = API_SESSION.get(f"{INVENTREE_URL}/api/part/sale-price/?limit=500", timeout=5)
-        if r.status_code != 200:
-            return
-        results = r.json().get("results", [])
+        while url:  # follow "next": past 500 price breaks the rest had no price
+            r = API_SESSION.get(url, timeout=5)
+            if r.status_code != 200:
+                return
+            data = r.json()
+            results += data.get("results", [])
+            url = data.get("next")
     except Exception:
         return
     best = {}
@@ -538,17 +570,26 @@ def get_image(part_detail, size=(80, 80)):
 
     img = None
     if os.path.exists(local_filename):
-        try: img = Image.open(local_filename)
-        except Exception: pass
+        # open() only reads the header; load() finds a file a power cut cut short.
+        try:
+            img = Image.open(local_filename)
+            img.load()
+        except Exception:
+            img = None
+            try: os.remove(local_filename)
+            except OSError: pass
 
     if img is None:
         img_url = f"{INVENTREE_URL}{img_path}" if img_path.startswith('/') else img_path
         try:
             response = API_SESSION.get(img_url, timeout=5)
             if response.status_code == 200:
-                with open(local_filename, "wb") as f: f.write(response.content)
                 img = Image.open(BytesIO(response.content))
-        except Exception: pass
+                img.load()
+                tmp = local_filename + ".tmp"
+                with open(tmp, "wb") as f: f.write(response.content)
+                os.replace(tmp, local_filename)
+        except Exception: img = None
 
     if img is None: return None
 
@@ -975,38 +1016,51 @@ def show_payment_qr(disp, cart):
     except Exception as e:
         show_warning_screen(disp, "QR ERROR", "Could not generate payment QR.")
 
+def _render_later(delay, task):
+    gen = _RENDER_GEN
+    def _run():
+        time.sleep(delay)
+        if _RENDER_GEN == gen:
+            LCD_QUEUE.put(task)
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _is_error(message):
+    """Messages that must reach the LCD as a warning, not be drawn over."""
+    m = (message or "").upper()
+    return "ERROR" in m or "FAILED" in m or "UNKNOWN BARCODE" in m
+
+
+def _show_searching(disp, barcode):
+    image, draw = _new_frame()
+    _border_rect(draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
+    draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT)
+    _center_text(draw, 8, "SEARCHING...", FONT_LG, fill=COL_FG)
+    _center_text(draw, 100, barcode[:20].upper(), FONT_MD, fill=COL_MUTED)
+    _show(disp, image)
+
+
 def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part):
-    if state == AppState.IDLE:
+    if state == "SEARCHING":
+        _show_searching(disp, message)
+    elif state == AppState.IDLE:
         # A refused first scan lands back on IDLE. Without this the warning would
         # never reach the screen and the item would just look ignored.
-        if message and "ERROR" in message.upper():
+        if _is_error(message):
             show_warning_screen(disp, "ERROR", message)
-
-            def _delayed_idle(d):
-                time.sleep(1.8)
-                LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
-            threading.Thread(target=_delayed_idle, args=(disp,), daemon=True).start()
+            _render_later(1.8, (disp, AppState.IDLE, None, None, None, None, None))
         else:
             show_idle_screen(disp)
     elif state == AppState.SHOPPING:
-        if message and "ERROR" in message.upper():
+        if _is_error(message):
             show_warning_screen(disp, "ERROR", message)
-            # Don't block the worker with sleep — schedule the follow-up render
-            def _delayed_cart_view(d, c, p):
-                time.sleep(1.4)
-                LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
-                               None, None, None, p))
-            threading.Thread(target=_delayed_cart_view, args=(disp, cart, last_part), daemon=True).start()
+            _render_later(1.4, (disp, AppState.SHOPPING, cart, None, None, None, last_part))
         elif message and ("Removed" in message or "Aborted" in message or "Volunteer" in message):
             if message.startswith("Volunteer drink"):
                 show_message_screen(disp, "VOLUNTEER", message, color=COL_SUCCESS)
             else:
                 show_message_screen(disp, "INFO", message, color=COL_DANGER)
-            def _delayed_cart_view(d, c, p):
-                time.sleep(0.9)
-                LCD_QUEUE.put((d, AppState.SHOPPING, CartSnapshot(c) if hasattr(c, 'items') else c,
-                               None, None, None, p))
-            threading.Thread(target=_delayed_cart_view, args=(disp, cart, last_part), daemon=True).start()
+            _render_later(0.9, (disp, AppState.SHOPPING, cart, None, None, None, last_part))
         else:
             show_item_on_lcd(disp, last_part, cart)
     elif state == AppState.CANCEL_CONFIRM:
@@ -1015,10 +1069,7 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
     elif state == AppState.CHECKOUT_CONFIRM:
         if message and "Unknown Barcode" in message:
             show_warning_screen(disp, "UNKNOWN", message)
-            def _delayed_confirm(d, c):
-                time.sleep(1.4)
-                LCD_QUEUE.put((d, AppState.CHECKOUT_CONFIRM, c, None, None, None, None))
-            threading.Thread(target=_delayed_confirm, args=(disp, cart), daemon=True).start()
+            _render_later(1.4, (disp, AppState.CHECKOUT_CONFIRM, cart, None, None, None, None))
         else:
             show_confirmation_screen(disp, cart)
     elif state == AppState.PROCESSING:
@@ -1027,11 +1078,7 @@ def _do_lcd_render(disp, state, cart, message, item_name, item_price, last_part)
         show_payment_qr(disp, cart)
     elif state == AppState.VOLUNTEER_DONE:
         show_message_screen(disp, "OATH ACCEPTED", "The spirit of HTL thanks you. Enjoy your drink!", color=COL_SUCCESS)
-
-        def _delayed_idle_after_thanks(d):
-            time.sleep(3)
-            LCD_QUEUE.put((d, AppState.IDLE, None, None, None, None, None))
-        threading.Thread(target=_delayed_idle_after_thanks, args=(disp,), daemon=True).start()
+        _render_later(3, (disp, AppState.IDLE, None, None, None, None, None))
 
 def _drain_lcd_queue():
     """Discard all pending LCD render tasks so only the latest is shown."""
@@ -1161,6 +1208,8 @@ def render(disp, state, cart, message=None, item_name=None, item_price=None, las
 
     print("="*40)
     
+    global _RENDER_GEN
+    _RENDER_GEN += 1
     if disp:
         global LAST_RENDER
         cart_snap = CartSnapshot(cart)
@@ -1342,6 +1391,16 @@ def read_scancode(device):
     except Exception:
         return None
 
+def drain_scanner(device):
+    """Throw away keys queued on the scanner and any half-read code."""
+    global _scan_buffer
+    try:
+        while select.select([device], [], [], 0)[0]:
+            device.read()
+    except Exception:
+        pass
+    _scan_buffer = ""
+
 _INSTANCE_LOCK_PATH = "/tmp/inventree-scanner.lock"
 _instance_lock_fh = None  # kept open for the process lifetime; closing frees the lock
 
@@ -1373,6 +1432,9 @@ def claim_single_instance():
 
 
 def main():
+    # systemctl stop sends SIGTERM; Python's default skips atexit and finally,
+    # so the barcode cache was not written and the LCD not released.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     if not claim_single_instance():
         sys.exit(1)
 
@@ -1417,7 +1479,7 @@ def main():
                 for part in results:
                     bc = part.get("barcode") or part.get("IPN")
                     if bc and not BARCODE_CACHE.get(bc):
-                        BARCODE_CACHE.cache[bc] = {
+                        entry = {
                             "pk": part.get("pk"),
                             "name": part.get("name"),
                             "pricing_min": part.get("pricing_min"),
@@ -1429,6 +1491,11 @@ def main():
                             "category": part.get("category"),
                             "_stock_item_pk": None,  # fetched lazily on first scan
                         }
+                        # Under the lock: flush() may be iterating the dict.
+                        # _dirty, or the flush() below writes nothing.
+                        with BARCODE_CACHE._lock:
+                            BARCODE_CACHE.cache[bc] = entry
+                            BARCODE_CACHE._dirty = True
                         loaded += 1
                 if isinstance(data, list) or len(results) < 100: break
                 page += 1
@@ -1469,11 +1536,17 @@ def main():
                     time.sleep(2)
                     scanner = find_scanner()
                     continue
-            else:
+            elif sys.stdin.isatty():
                 try:
                     raw = input("Scan: ").strip()
                     barcode = decode_manual_input(raw) if raw else ""
                 except EOFError: break
+            else:
+                # Under systemd stdin is /dev/null: input() ended the process
+                # and systemd restarted it every 100 ms. Wait for the scanner.
+                time.sleep(2)
+                scanner = find_scanner()
+                continue
 
             if not barcode: continue
 
@@ -1491,14 +1564,10 @@ def main():
 
             # Show immediate "SEARCHING" feedback on LCD while the API call happens,
             # but only for product scans (not commands which are handled instantly).
+            # Through the queue: lcd_worker is the only thread that may write SPI.
             if disp and not is_command:
                 _drain_lcd_queue()
-                _searching_img, _searching_draw = _new_frame()
-                _border_rect(_searching_draw, [0, 0, L_WIDTH - 1, L_HEIGHT - 1])
-                _searching_draw.rectangle([BORDER_W, BORDER_W, L_WIDTH - BORDER_W - 1, 34], fill=COL_ACCENT)
-                _center_text(_searching_draw, 8, "SEARCHING...", FONT_LG, fill=COL_FG)
-                _center_text(_searching_draw, 100, barcode[:20].upper(), FONT_MD, fill=COL_MUTED)
-                _show(disp, _searching_img)
+                LCD_QUEUE.put((disp, "SEARCHING", None, barcode, None, None, None))
 
             new_state, msg, item_name, item_price, scanned_part = handle_barcode(state, barcode, cart)
             
@@ -1521,6 +1590,9 @@ def main():
                 else:
                     new_state = AppState.SHOPPING
                     msg = f"Checkout Failed: {err_msg}"
+                # Drop whatever was scanned while checkout ran: a second CONFIRM
+                # from the queue would clear the payment QR before anyone paid.
+                if scanner: drain_scanner(scanner)
             
             state = new_state
             if scanned_part: last_part = scanned_part
