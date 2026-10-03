@@ -11,11 +11,12 @@ flags=(
    --overscroll-history-navigation=0
    --disable-features=TranslateUI
    --disable-infobars
-   --no-memcheck
    --force-device-scale-factor=1
    --autoplay-policy=no-user-gesture-required
-   --disable-low-end-device-mode
-   --memory-pressure-off
+   # 512 MB Pi: let Chromium save memory instead of switching that off, and
+   # keep it to one renderer (the TV page is the only tab).
+   --enable-low-end-device-mode
+   --renderer-process-limit=1
    --disable-background-networking
    --disable-sync
    --metrics-recording-only
@@ -29,5 +30,4 @@ flags=(
 # Reload 20s after launch to clear any initial white screen
 (sleep 20 && DISPLAY=:0 xdotool key F5) &
 
-chromium-browser "${flags[@]}" --app=$(/opt/custompios/scripts/get_url)
-exit;
+chromium-browser "${flags[@]}" --app="$(/opt/custompios/scripts/get_url)"

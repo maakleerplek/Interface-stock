@@ -17,6 +17,7 @@ WorkingDirectory=__INSTALL_DIR__
 StandardOutput=journal
 StandardError=journal
 Restart=always
+RestartSec=5
 User=__USER__
 Environment="PYTHONUNBUFFERED=1"
 

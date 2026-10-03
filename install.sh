@@ -5,7 +5,7 @@ set -e
 
 echo "--- Updating system ---"
 sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6 libatlas-base-dev libopenblas-dev python3-lgpio python3-tk
+sudo apt-get install -y python3-venv python3-pip p7zip-full wget libopenjp2-7 libtiff6 libopenblas-dev python3-lgpio python3-tk xdotool imagemagick cec-utils curl
 
 echo "--- Creating Virtual Environment ---"
 if [ ! -d ".venv" ]; then
@@ -19,11 +19,14 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "--- Checking SPI Status ---"
-if grep -q "dtparam=spi=on" /boot/config.txt; then
-    echo "SPI is already enabled in /boot/config.txt."
+# Bookworm moved it to /boot/firmware; the old path is then ignored by the firmware.
+BOOT_CFG=/boot/config.txt
+[ -f /boot/firmware/config.txt ] && BOOT_CFG=/boot/firmware/config.txt
+if grep -q "dtparam=spi=on" "$BOOT_CFG"; then
+    echo "SPI is already enabled in $BOOT_CFG."
 else
-    echo "Enabling SPI in /boot/config.txt..."
-    echo "dtparam=spi=on" | sudo tee -a /boot/config.txt
+    echo "Enabling SPI in $BOOT_CFG..."
+    echo "dtparam=spi=on" | sudo tee -a "$BOOT_CFG"
     echo "IMPORTANT: SPI enabled. You MUST reboot after this script finishes."
 fi
 

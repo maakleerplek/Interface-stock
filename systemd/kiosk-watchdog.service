@@ -1,7 +1,11 @@
 [Unit]
 Description=Kiosk watchdog: blank TV page, missing Wi-Fi, full disk
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
+# A hung X must not hang the watchdog: the timer only fires again once
+# this run has ended.
+TimeoutStartSec=90
 ExecStart=/home/pi/Interface-stock/scripts/kiosk-watchdog.sh

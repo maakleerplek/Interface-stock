@@ -11,12 +11,16 @@ echo ""
 
 # 1. Pull latest code
 echo "--- Pulling latest code ---"
+OLD_HEAD=$(git -C "$INSTALL_DIR" rev-parse HEAD)
 git -C "$INSTALL_DIR" pull
 
-# 2. Install/sync Python dependencies (fast no-op if nothing changed)
+# 2. Install Python dependencies, only when requirements.txt changed: a nightly
+#    pip run could pull a new release that has no wheel and build it on 512 MB.
 echo ""
-echo "--- Syncing Python dependencies ---"
-"$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
+if ! git -C "$INSTALL_DIR" diff --quiet "$OLD_HEAD" HEAD -- requirements.txt; then
+    echo "--- requirements.txt changed: installing Python dependencies ---"
+    "$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
+fi
 echo "Dependencies up to date."
 
 # 3. Restart service if it's installed, otherwise do nothing
