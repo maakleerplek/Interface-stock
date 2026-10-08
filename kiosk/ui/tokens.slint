@@ -1,0 +1,108 @@
+// Shared by the design templates: maakleerplek.be colours and fonts, the
+// data structs the Rust glue fills in, and a flat button.
+
+import "fonts/Schibsted-400.ttf";
+import "fonts/Schibsted-600.ttf";
+import "fonts/Schibsted-800.ttf";
+import "fonts/Literata-500.ttf";
+import "fonts/Literata-700.ttf";
+import "fonts/JetBrains-500.ttf";
+import "fonts/JetBrains-700.ttf";
+
+export global Mk {
+    // surfaces
+    out property <color> wit: #ffffff;
+    out property <color> beton: #F1F0EC;
+    out property <color> beton-donker: #E3E1DB;
+    // text and rules
+    out property <color> inkt: #171717;
+    out property <color> grafiet: #5B5C55;
+    out property <color> lijn: #D8D7D1;
+    out property <color> rood: #B3261E;
+    // agenda colours, light / deep
+    out property <color> openlab: #CCDC9C;
+    out property <color> openlab-diep: #4A5C22;
+    out property <color> workshop: #CCDCF4;
+    out property <color> workshop-diep: #2F4F85;
+    out property <color> herstel: #ECB47C;
+    out property <color> herstel-diep: #7F4A12;
+    out property <color> jongeren: #C4B4E4;
+    // HTL logo
+    out property <color> teal: #1389A5;
+    out property <color> oranje: #EF8D08;
+
+    out property <string> sans: "Schibsted Grotesk";
+    out property <string> serif: "Literata";
+    out property <string> mono: "JetBrains Mono";
+}
+
+export enum Screen { shop, cancel-confirm, checkout-confirm, processing, qr, pay-confirm, volunteer-done }
+
+export struct Category {
+    name: string,
+    light: color,
+    deep: color,
+}
+
+export struct CartRow {
+    name: string,
+    qty: int,
+    price: string,
+    deep: color,
+}
+
+export struct ProductTile {
+    pk: int,
+    name: string,
+    price: string,
+    initials: string,
+    light: color,
+    deep: color,
+    sold-out: bool,
+    category: string,
+    in-cart: int,
+    image: image,
+    has-image: bool,
+}
+
+// Flat button. Pressed = a shade darker, disabled = faded.
+export component Press inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Mk.inkt;
+    in property <color> ink: Mk.wit;
+    in property <color> outline: transparent;
+    in property <length> outline-w: 2px;
+    in property <string> family: Mk.sans;
+    in property <length> font-size: 24px;
+    in property <int> weight: 600;
+    in property <bool> enabled: true;
+    in property <length> radius: 12px;
+    callback clicked;
+
+    accessible-role: button;
+    accessible-label: root.text;
+    min-height: 64px;
+    min-width: 64px;
+    border-radius: root.radius;
+    background: touch.pressed ? root.fill.darker(25%) : root.fill;
+    border-width: root.outline == transparent ? 0px : root.outline-w;
+    border-color: root.outline;
+    opacity: root.enabled ? 1 : 0.35;
+
+    Text {
+        width: parent.width - 16px;
+        text: root.text;
+        color: root.ink;
+        font-family: root.family;
+        font-size: root.font-size;
+        font-weight: root.weight;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}

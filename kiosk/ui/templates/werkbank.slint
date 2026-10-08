@@ -1,0 +1,814 @@
+// Template 3 — WERKBANK: the shop as a workbench. Products hang as price
+// tags on a pegboard, the cart is a printed receipt, labels and messages
+// are Dymo tape. Teal and orange come from the HTL logo, everything else
+// from the maakleerplek palette.
+
+import { Mk, Screen, Category, CartRow, ProductTile, Press } from "../tokens.slint";
+export { Screen, Category, CartRow, ProductTile }
+
+// Black embossing tape with white mono capitals.
+component Dymo inherits Rectangle {
+    in property <string> text;
+    in property <color> tape: Mk.inkt;
+    in property <color> ink: Mk.wit;
+    in property <length> font-size: 18px;
+    height: root.font-size * 2;
+    width: t.preferred-width + root.font-size * 1.4;
+    background: root.tape;
+    border-radius: 3px;
+    t := Text {
+        text: root.text;
+        color: root.ink;
+        font-family: Mk.mono;
+        font-size: root.font-size;
+        font-weight: 700;
+        letter-spacing: 2px;
+    }
+}
+
+// Paper with a torn (zigzag) bottom edge.
+component Receipt inherits Rectangle {
+    Rectangle {
+        x: 6px;
+        y: 6px;
+        width: parent.width;
+        height: parent.height - 12px;
+        background: #00000014;
+    }
+    Rectangle {
+        height: parent.height - 12px;
+        y: 0;
+        background: Mk.wit;
+    }
+    Path {
+        y: parent.height - 12px;
+        height: 12px;
+        width: parent.width;
+        viewbox-width: 400;
+        viewbox-height: 12;
+        fill: Mk.wit;
+        commands: "M 0 0 L 400 0 L 400 2 L 390 12 L 380 2 L 370 12 L 360 2 L 350 12 L 340 2 L 330 12 L 320 2 L 310 12 L 300 2 L 290 12 L 280 2 L 270 12 L 260 2 L 250 12 L 240 2 L 230 12 L 220 2 L 210 12 L 200 2 L 190 12 L 180 2 L 170 12 L 160 2 L 150 12 L 140 2 L 130 12 L 120 2 L 110 12 L 100 2 L 90 12 L 80 2 L 70 12 L 60 2 L 50 12 L 40 2 L 30 12 L 20 2 L 10 12 L 0 2 Z";
+    }
+    @children
+}
+
+component Dashes inherits Text {
+    text: "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -";
+    color: Mk.lijn.darker(30%);
+    font-family: Mk.mono;
+    font-size: 14px;
+    overflow: clip;
+    height: 16px;
+}
+
+// A price tag hanging from a hook by a string.
+component Tag inherits Rectangle {
+    in property <ProductTile> item;
+    callback picked(int);
+
+    accessible-role: button;
+    accessible-label: root.item.name;
+    opacity: root.item.sold-out ? 0.45 : 1;
+
+    // string from the hook down to the hole
+    Rectangle {
+        x: parent.width / 2 - 1px;
+        y: 0;
+        width: 2px;
+        height: 30px;
+        background: Mk.grafiet;
+    }
+    Rectangle {
+        x: parent.width / 2 - 7px;
+        y: 0;
+        width: 14px;
+        height: 6px;
+        border-radius: 3px;
+        background: Mk.grafiet;
+    }
+    Path {
+        y: 16px;
+        height: parent.height - 16px;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        fill: touch.pressed ? Mk.beton : Mk.wit;
+        stroke: root.item.in-cart > 0 ? Mk.teal : Mk.inkt;
+        stroke-width: root.item.in-cart > 0 ? 4px : 2px;
+        commands: "M 22 0 L 78 0 L 100 12 L 100 100 L 0 100 L 0 12 Z";
+    }
+    // punched hole with a reinforcement ring
+    Rectangle {
+        x: parent.width / 2 - 9px;
+        y: 22px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: #ECE9E1;
+        border-width: 3px;
+        border-color: root.item.light;
+    }
+    VerticalLayout {
+        y: 44px;
+        height: parent.height - 44px - 4px;
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-bottom: 6px;
+        spacing: 2px;
+        Rectangle {
+            height: 62px;
+            if root.item.has-image: Image {
+                height: parent.height;
+                width: parent.width;
+                source: root.item.image;
+                image-fit: contain;
+            }
+            if !root.item.has-image: Text {
+                text: root.item.initials;
+                color: root.item.deep;
+                font-family: Mk.mono;
+                font-size: 34px;
+                font-weight: 700;
+            }
+        }
+        Text {
+            text: root.item.name;
+            color: Mk.inkt;
+            font-family: Mk.mono;
+            font-size: 14px;
+            font-weight: 500;
+            wrap: word-wrap;
+            overflow: elide;
+            height: 36px;
+            horizontal-alignment: center;
+            vertical-alignment: top;
+        }
+        Text {
+            text: root.item.sold-out ? "SOLD OUT" : root.item.price;
+            color: root.item.sold-out ? Mk.rood : Mk.inkt;
+            font-family: Mk.mono;
+            font-size: root.item.sold-out ? 16px : 24px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+        Rectangle { height: 5px; background: root.item.deep; }
+    }
+
+    if root.item.in-cart > 0: Rectangle {
+        x: parent.width - 40px;
+        y: 26px;
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        background: Mk.teal;
+        Text {
+            text: root.item.in-cart;
+            color: Mk.wit;
+            font-family: Mk.mono;
+            font-size: 17px;
+            font-weight: 700;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: !root.item.sold-out;
+        clicked => { root.picked(root.item.pk); }
+    }
+}
+
+component BonLines inherits Rectangle {
+    in property <[CartRow]> rows;
+    in property <bool> editable;
+    property <length> row-h: root.editable ? 68px : 34px;
+    callback inc(int);
+    callback dec(int);
+    clip: true;
+
+    flick := Flickable {
+        content-height: root.rows.length * root.row-h;
+        for row[i] in root.rows: Rectangle {
+            y: i * root.row-h;
+            height: root.row-h;
+            // read-only: one printed line
+            if !root.editable: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: row.qty + "x";
+                    width: 34px;
+                    color: Mk.inkt;
+                    font-family: Mk.mono;
+                    font-size: 17px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: row.name;
+                    color: Mk.inkt;
+                    font-family: Mk.mono;
+                    font-size: 16px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: row.price;
+                    color: Mk.inkt;
+                    font-family: Mk.mono;
+                    font-size: 17px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+            // editable: name and price printed, buttons beside them
+            if root.editable: HorizontalLayout {
+                spacing: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: row.qty + "x " + row.name;
+                        color: Mk.inkt;
+                        font-family: Mk.mono;
+                        font-size: 16px;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.price;
+                        color: Mk.grafiet;
+                        font-family: Mk.mono;
+                        font-size: 15px;
+                    }
+                }
+                Press {
+                    text: "−";
+                    width: 56px;
+                    min-height: 56px;
+                    radius: 6px;
+                    fill: Mk.beton-donker;
+                    ink: Mk.inkt;
+                    family: Mk.mono;
+                    font-size: 24px;
+                    accessible-label: "minus " + row.name;
+                    clicked => { root.dec(i); }
+                }
+                Press {
+                    text: "+";
+                    width: 56px;
+                    min-height: 56px;
+                    radius: 6px;
+                    fill: Mk.teal;
+                    family: Mk.mono;
+                    font-size: 24px;
+                    accessible-label: "plus " + row.name;
+                    clicked => { root.inc(i); }
+                }
+            }
+        }
+    }
+
+    if flick.content-height > flick.height && -flick.content-y < flick.content-height - flick.height - 1px: Rectangle {
+        y: parent.height - 24px;
+        height: 24px;
+        background: Mk.wit;
+        Text {
+            text: "... MORE BELOW (SWIPE) ...";
+            color: Mk.grafiet;
+            font-family: Mk.mono;
+            font-size: 13px;
+        }
+    }
+}
+
+// Header lines printed at the top of every receipt.
+component BonHead inherits VerticalLayout {
+    in property <string> line: "";
+    spacing: 2px;
+    Text {
+        text: "HIGH TECH LAB";
+        color: Mk.inkt;
+        font-family: Mk.mono;
+        font-size: 18px;
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: root.line;
+        color: Mk.grafiet;
+        font-family: Mk.mono;
+        font-size: 13px;
+        horizontal-alignment: center;
+    }
+    Dashes { }
+}
+
+// Ink stamp: thick outline and capitals, no fill.
+component Stamp inherits Rectangle {
+    in property <string> text;
+    in property <color> ink: Mk.oranje;
+    in property <length> font-size: 34px;
+    width: st.preferred-width + 36px;
+    height: root.font-size * 1.9;
+    border-width: 5px;
+    border-radius: 6px;
+    border-color: root.ink;
+    st := Text {
+        text: root.text;
+        color: root.ink;
+        font-family: Mk.mono;
+        font-size: root.font-size;
+        font-weight: 700;
+        letter-spacing: 3px;
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "interface-stock";
+    width: 1280px;
+    height: 720px;
+    background: #ECE9E1;
+    default-font-family: Mk.sans;
+
+    in property <Screen> screen: Screen.shop;
+    in property <string> htl-name;
+    in property <string> message;
+    in property <bool> message-error;
+    in property <string> searching;
+    in property <[CartRow]> rows;
+    in property <int> units;
+    in property <string> total;
+    in property <bool> volunteer;
+    in property <image> qr;
+    in property <string> cart-categories;
+    in property <string> done-summary;
+    in property <[Category]> categories;
+    in-out property <string> category: "ALL";
+    in property <[ProductTile]> all-products;
+    in property <[ProductTile]> products;
+
+    callback action(string, int);
+    callback pick(int);
+    callback select-category(string);
+
+    // pegboard
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("../assets/pegboard.png");
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+    }
+
+    // --- top rail ----------------------------------------------------------
+    Rectangle {
+        y: 0;
+        height: 70px;
+        background: Mk.inkt;
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 12px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 14px;
+            Image {
+                source: @image-url("../assets/cube-teal.png");
+                width: 52px;
+                image-fit: contain;
+            }
+            Text {
+                text: root.htl-name;
+                color: Mk.wit;
+                font-family: Mk.mono;
+                font-size: 22px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                if root.message != "": Dymo {
+                    text: root.message;
+                    tape: root.message-error ? Mk.rood : Mk.oranje;
+                    ink: root.message-error ? Mk.wit : Mk.inkt;
+                    font-size: 17px;
+                }
+            }
+            Press {
+                text: "◀ TV";
+                width: 96px;
+                min-height: 56px;
+                radius: 6px;
+                fill: #2a2a2a;
+                family: Mk.mono;
+                font-size: 17px;
+                accessible-label: "TV previous page";
+                clicked => { root.action("page-prev", 0); }
+            }
+            Press {
+                text: "TV ▶";
+                width: 96px;
+                min-height: 56px;
+                radius: 6px;
+                fill: #2a2a2a;
+                family: Mk.mono;
+                font-size: 17px;
+                accessible-label: "TV next page";
+                clicked => { root.action("page-next", 0); }
+            }
+        }
+    }
+
+    body := Rectangle {
+        y: 70px;
+        height: root.height - 70px;
+
+        // --- shop: labels | tags on the board | receipt --------------------
+        if root.screen == Screen.shop: HorizontalLayout {
+            padding: 16px;
+            spacing: 16px;
+            VerticalLayout {
+                width: 170px;
+                spacing: 12px;
+                for c in root.categories: Rectangle {
+                    accessible-role: button;
+                    accessible-label: c.name;
+                    height: 64px;
+                    background: c.name == root.category ? Mk.inkt : (cat-touch.pressed ? Mk.beton-donker : Mk.wit);
+                    border-radius: 4px;
+                    border-width: 2px;
+                    border-color: Mk.inkt;
+                    Rectangle {
+                        x: 0;
+                        width: 10px;
+                        border-radius: 2px;
+                        background: c.light;
+                    }
+                    Text {
+                        x: 22px;
+                        text: c.name;
+                        color: c.name == root.category ? Mk.wit : Mk.inkt;
+                        font-family: Mk.mono;
+                        font-size: 16px;
+                        font-weight: 700;
+                        letter-spacing: 2px;
+                    }
+                    cat-touch := TouchArea {
+                        clicked => { root.select-category(c.name); }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+            board := Rectangle {
+                horizontal-stretch: 1;
+                clip: true;
+                property <int> cols: 3;
+                property <length> gap: 14px;
+                property <length> tw: (self.width - (self.cols - 1) * self.gap) / self.cols;
+                property <length> th: 206px;
+                bflick := Flickable {
+                    content-height: Math.ceil(root.products.length / board.cols) * (board.th + board.gap);
+                    for p[i] in root.products: Tag {
+                        x: mod(i, board.cols) * (board.tw + board.gap);
+                        y: floor(i / board.cols) * (board.th + board.gap);
+                        width: board.tw;
+                        height: board.th;
+                        item: p;
+                        picked(pk) => { root.pick(pk); }
+                    }
+                }
+                if bflick.content-height > bflick.height && -bflick.content-y < bflick.content-height - bflick.height - 1px: Dymo {
+                    y: parent.height - self.height - 4px;
+                    text: "MORE BELOW - SWIPE UP";
+                    font-size: 15px;
+                }
+            }
+            VerticalLayout {
+                width: 400px;
+                spacing: 12px;
+                Receipt {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 18px;
+                        padding-bottom: 26px;
+                        spacing: 6px;
+                        BonHead { line: root.units == 0 ? "-- your cart is empty --" : root.units + " ITEM(S)"; }
+                        if root.units == 0: Text {
+                            vertical-stretch: 1;
+                            text: "Tap a tag on the board\nor scan a barcode.";
+                            color: Mk.grafiet;
+                            font-family: Mk.mono;
+                            font-size: 16px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        if root.units > 0: BonLines {
+                            vertical-stretch: 1;
+                            rows: root.rows;
+                            editable: true;
+                            inc(i) => { root.action("inc", i); }
+                            dec(i) => { root.action("dec", i); }
+                        }
+                        Dashes { }
+                        HorizontalLayout {
+                            Text {
+                                text: "TOTAL";
+                                color: Mk.inkt;
+                                font-family: Mk.mono;
+                                font-size: 22px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.volunteer ? "FREE" : root.total;
+                                color: root.volunteer ? Mk.oranje : Mk.inkt;
+                                font-family: Mk.mono;
+                                font-size: 34px;
+                                font-weight: 700;
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Press {
+                        text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
+                        enabled: root.units > 0;
+                        radius: 6px;
+                        fill: Mk.oranje;
+                        ink: Mk.inkt;
+                        outline: root.volunteer ? Mk.inkt : transparent;
+                        outline-w: 3px;
+                        family: Mk.mono;
+                        font-size: 17px;
+                        weight: 700;
+                        accessible-label: root.volunteer ? "VOLUNTEER: FREE" : "VOLUNTEER DRINK";
+                        clicked => { root.action("volunteer", 0); }
+                    }
+                    Press {
+                        text: "CANCEL";
+                        width: 120px;
+                        enabled: root.units > 0;
+                        radius: 6px;
+                        fill: Mk.wit;
+                        ink: Mk.rood;
+                        outline: Mk.rood;
+                        family: Mk.mono;
+                        font-size: 17px;
+                        weight: 700;
+                        clicked => { root.action("cancel", 0); }
+                    }
+                }
+                Press {
+                    text: "CHECKOUT →";
+                    enabled: root.units > 0;
+                    min-height: 80px;
+                    radius: 6px;
+                    fill: Mk.teal;
+                    family: Mk.mono;
+                    font-size: 26px;
+                    weight: 700;
+                    clicked => { root.action("confirm", 0); }
+                }
+            }
+        }
+
+        // Dialog screens: the receipt is brought forward on the left, the
+        // choices sit on the right.
+        if root.screen != Screen.shop && root.screen != Screen.processing && root.screen != Screen.volunteer-done: HorizontalLayout {
+            padding: 24px;
+            padding-left: 110px;
+            spacing: 48px;
+            Receipt {
+                width: 560px;
+                VerticalLayout {
+                    padding: 24px;
+                    padding-bottom: 32px;
+                    spacing: 8px;
+                    BonHead {
+                        line: root.screen == Screen.qr ? "PAY WITH WERO" : root.screen == Screen.pay-confirm ? "PAYMENT CHECK" : root.screen == Screen.cancel-confirm ? "CANCEL" : root.volunteer ? "VOLUNTEER DRINK" : "CHECKOUT";
+                    }
+                    if root.screen == Screen.qr: Image {
+                        vertical-stretch: 1;
+                        source: root.qr;
+                        image-fit: contain;
+                        image-rendering: pixelated;
+                    }
+                    if root.screen == Screen.checkout-confirm && root.volunteer: Text {
+                        vertical-stretch: 1;
+                        text: "BY MY HONOUR AND THE POWER VESTED IN ME, I SOLEMNLY SWEAR BY THE SPIRIT OF HTL THAT I WORKED WELL TODAY AND DESERVE A FREE DRINK.";
+                        color: Mk.inkt;
+                        font-family: Mk.mono;
+                        font-size: 20px;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+                    if (root.screen == Screen.checkout-confirm && !root.volunteer) || root.screen == Screen.cancel-confirm: BonLines {
+                        vertical-stretch: 1;
+                        rows: root.rows;
+                        editable: false;
+                    }
+                    if root.screen == Screen.pay-confirm: VerticalLayout {
+                        vertical-stretch: 1;
+                        alignment: center;
+                        spacing: 18px;
+                        Text {
+                            text: "AMOUNT DUE";
+                            color: Mk.grafiet;
+                            font-family: Mk.mono;
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.total;
+                            color: Mk.inkt;
+                            font-family: Mk.mono;
+                            font-size: 64px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            Stamp { text: "PAID?"; ink: Mk.teal; }
+                        }
+                    }
+                    Dashes { }
+                    HorizontalLayout {
+                        Text {
+                            text: "TOTAL";
+                            color: Mk.inkt;
+                            font-family: Mk.mono;
+                            font-size: 22px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.total;
+                            color: Mk.inkt;
+                            font-family: Mk.mono;
+                            font-size: 30px;
+                            font-weight: 700;
+                        }
+                    }
+                }
+                if root.screen == Screen.checkout-confirm && root.volunteer: Stamp {
+                    x: parent.width - self.width - 30px;
+                    y: parent.height - 150px;
+                    text: "FREE";
+                }
+                if root.screen == Screen.cancel-confirm: Stamp {
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height / 2 - 40px;
+                    text: "VOID";
+                    ink: Mk.rood;
+                    font-size: 56px;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 16px;
+                Text {
+                    text: root.screen == Screen.qr ? "Scan the code with Wero or your banking app."
+                        : root.screen == Screen.pay-confirm ? "Did the payment go through in your banking app?"
+                        : root.screen == Screen.cancel-confirm ? "Throw this receipt away? Nothing is taken from stock."
+                        : root.volunteer ? "Read the oath, then swear it." : "Check the receipt. Confirming takes these items from stock.";
+                    color: Mk.inkt;
+                    font-size: 26px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                if root.screen == Screen.checkout-confirm: Press {
+                    text: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY";
+                    min-height: 100px;
+                    radius: 6px;
+                    fill: root.volunteer ? Mk.oranje : Mk.teal;
+                    ink: root.volunteer ? Mk.inkt : Mk.wit;
+                    family: Mk.mono;
+                    font-size: 26px;
+                    weight: 700;
+                    clicked => { root.action("confirm", 0); }
+                }
+                if root.screen == Screen.checkout-confirm: Press {
+                    text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
+                    radius: 6px;
+                    fill: Mk.wit;
+                    ink: Mk.inkt;
+                    outline: Mk.oranje;
+                    outline-w: 3px;
+                    family: Mk.mono;
+                    font-size: 18px;
+                    weight: 700;
+                    clicked => { root.action("volunteer", 0); }
+                }
+                if root.screen == Screen.checkout-confirm: Press {
+                    text: "← BACK";
+                    radius: 6px;
+                    fill: Mk.wit;
+                    ink: Mk.inkt;
+                    outline: Mk.inkt;
+                    family: Mk.mono;
+                    font-size: 18px;
+                    weight: 700;
+                    clicked => { root.action("back", 0); }
+                }
+                if root.screen == Screen.qr: Press {
+                    text: "DONE";
+                    min-height: 110px;
+                    radius: 6px;
+                    fill: Mk.teal;
+                    family: Mk.mono;
+                    font-size: 30px;
+                    weight: 700;
+                    clicked => { root.action("confirm", 0); }
+                }
+                if root.screen == Screen.pay-confirm: Press {
+                    text: "YES, I PAID";
+                    min-height: 110px;
+                    radius: 6px;
+                    fill: Mk.teal;
+                    family: Mk.mono;
+                    font-size: 28px;
+                    weight: 700;
+                    clicked => { root.action("confirm", 0); }
+                }
+                if root.screen == Screen.pay-confirm: Press {
+                    text: "← NOT YET";
+                    radius: 6px;
+                    fill: Mk.wit;
+                    ink: Mk.inkt;
+                    outline: Mk.inkt;
+                    family: Mk.mono;
+                    font-size: 20px;
+                    weight: 700;
+                    clicked => { root.action("back", 0); }
+                }
+                if root.screen == Screen.cancel-confirm: Press {
+                    text: "YES, EMPTY IT";
+                    min-height: 100px;
+                    radius: 6px;
+                    fill: Mk.rood;
+                    family: Mk.mono;
+                    font-size: 24px;
+                    weight: 700;
+                    clicked => { root.action("cancel", 0); }
+                }
+                if root.screen == Screen.cancel-confirm: Press {
+                    text: "← KEEP SHOPPING";
+                    radius: 6px;
+                    fill: Mk.wit;
+                    ink: Mk.inkt;
+                    outline: Mk.inkt;
+                    family: Mk.mono;
+                    font-size: 20px;
+                    weight: 700;
+                    clicked => { root.action("back", 0); }
+                }
+            }
+        }
+
+        if root.screen == Screen.processing: Dymo {
+            text: "PRINTING RECEIPT ...";
+            font-size: 30px;
+        }
+
+        if root.screen == Screen.volunteer-done: VerticalLayout {
+            alignment: center;
+            spacing: 28px;
+            HorizontalLayout {
+                alignment: center;
+                Dymo { text: "ENJOY YOUR DRINK"; font-size: 44px; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Stamp { text: "FREE"; font-size: 40px; }
+            }
+            Text {
+                text: root.done-summary;
+                color: Mk.inkt;
+                font-family: Mk.mono;
+                font-size: 22px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    if root.searching != "": Rectangle {
+        background: #171717cc;
+        TouchArea { }
+        VerticalLayout {
+            alignment: center;
+            spacing: 18px;
+            HorizontalLayout {
+                alignment: center;
+                Dymo { text: "LOOKING UP"; tape: Mk.oranje; ink: Mk.inkt; font-size: 22px; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Dymo { text: root.searching; font-size: 40px; }
+            }
+        }
+    }
+}

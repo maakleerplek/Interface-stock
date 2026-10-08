@@ -1,0 +1,37 @@
+[package]
+name = "interface-stock"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "image-default-formats"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+evdev = "0.13"
+ureq = { version = "3", features = ["json"] }
+tungstenite = "0.30"
+dotenvy = "0.15"
+qrcode = { version = "0.14", default-features = false }
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"
+png = "0.17"
+
+[features]
+# Builds the design templates in ui/templates/ for examples/templates.rs.
+templates = []
+
+[[example]]
+name = "templates"
+required-features = ["templates"]

@@ -9,7 +9,10 @@ flags=(
    --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'
    --disable-component-update
    --overscroll-history-navigation=0
-   --disable-features=TranslateUI
+   # LocalNetworkAccessChecks: the TV page (served from the server) talks to
+   # the touch kiosk on ws://localhost:8765; newer Chromium would otherwise
+   # show a permission prompt that nobody can answer in kiosk mode.
+   --disable-features=TranslateUI,LocalNetworkAccessChecks
    --disable-infobars
    --force-device-scale-factor=1
    --autoplay-policy=no-user-gesture-required

@@ -1,0 +1,755 @@
+// Kiosk UI in the "agenda" style of maakleerplek.be: categories are
+// full-height colour bands, cards carry a stripe and a label in their
+// category colour, every dialog is an agenda entry with a coloured left
+// column. No black surfaces; the main action is workshop blue.
+
+import { Mk, Screen, Category, CartRow, ProductTile, Press } from "tokens.slint";
+export { Screen, Category, CartRow, ProductTile }
+
+component Card inherits Rectangle {
+    in property <ProductTile> item;
+    callback picked(int);
+
+    accessible-role: button;
+    accessible-label: root.item.name;
+    background: touch.pressed ? Mk.beton : Mk.wit;
+    border-width: 1px;
+    border-color: Mk.lijn;
+    opacity: root.item.sold-out ? 0.4 : 1;
+    clip: true;
+
+    Rectangle { y: 0; height: 8px; background: root.item.deep; }
+    VerticalLayout {
+        padding: 10px;
+        padding-top: 14px;
+        spacing: 4px;
+        HorizontalLayout {
+            height: 24px;
+            Rectangle {
+                width: label.preferred-width + 14px;
+                background: root.item.light;
+                label := Text {
+                    text: root.item.category;
+                    color: root.item.deep;
+                    font-size: 12px;
+                    font-weight: 800;
+                }
+            }
+            Rectangle { }
+        }
+        Rectangle {
+            height: 60px;
+            if root.item.has-image: Image {
+                height: parent.height;
+                width: parent.width;
+                source: root.item.image;
+                image-fit: contain;
+            }
+            if !root.item.has-image: Text {
+                text: root.item.initials;
+                color: root.item.deep;
+                font-family: Mk.serif;
+                font-size: 40px;
+                font-weight: 700;
+            }
+        }
+        Text {
+            text: root.item.name;
+            color: Mk.inkt;
+            font-size: 17px;
+            font-weight: 600;
+            wrap: word-wrap;
+            overflow: elide;
+            height: 40px;
+            vertical-alignment: top;
+        }
+        Text {
+            text: root.item.sold-out ? "SOLD OUT" : root.item.price;
+            color: root.item.sold-out ? Mk.rood : Mk.inkt;
+            font-family: root.item.sold-out ? Mk.sans : Mk.serif;
+            font-size: root.item.sold-out ? 16px : 26px;
+            font-weight: 700;
+        }
+    }
+
+    if root.item.in-cart > 0: Rectangle {
+        x: parent.width - 44px;
+        y: 8px;
+        width: 44px;
+        height: 40px;
+        background: root.item.deep;
+        Text {
+            text: "×" + root.item.in-cart;
+            color: Mk.wit;
+            font-size: 18px;
+            font-weight: 800;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: !root.item.sold-out;
+        clicked => { root.picked(root.item.pk); }
+    }
+}
+
+component Entries inherits Rectangle {
+    in property <[CartRow]> rows;
+    in property <bool> editable;
+    property <length> row-h: root.editable ? 76px : 54px;
+    callback inc(int);
+    callback dec(int);
+    clip: true;
+
+    flick := Flickable {
+        content-height: root.rows.length * root.row-h;
+        for row[i] in root.rows: Rectangle {
+            y: i * root.row-h;
+            height: root.row-h - 6px;
+            background: Mk.wit;
+            HorizontalLayout {
+                spacing: 12px;
+                padding-right: 6px;
+                Rectangle {
+                    width: 58px;
+                    background: row.deep;
+                    Text {
+                        text: row.qty;
+                        color: Mk.wit;
+                        font-family: Mk.serif;
+                        font-size: 28px;
+                        font-weight: 700;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text {
+                        text: row.name;
+                        color: Mk.inkt;
+                        font-size: root.editable ? 17px : 20px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    if root.editable: Text {
+                        text: row.price;
+                        color: Mk.grafiet;
+                        font-size: 16px;
+                    }
+                }
+                if !root.editable: Text {
+                    text: row.price;
+                    color: Mk.inkt;
+                    font-family: Mk.serif;
+                    font-size: 24px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                if root.editable: Press {
+                    text: "−";
+                    width: 58px;
+                    min-height: 58px;
+                    radius: 0px;
+                    y: (parent.height - 58px) / 2;
+                    fill: Mk.wit;
+                    ink: Mk.inkt;
+                    outline: Mk.grafiet;
+                    font-size: 28px;
+                    accessible-label: "minus " + row.name;
+                    clicked => { root.dec(i); }
+                }
+                if root.editable: Press {
+                    text: "+";
+                    width: 58px;
+                    min-height: 58px;
+                    radius: 0px;
+                    y: (parent.height - 58px) / 2;
+                    fill: Mk.workshop-diep;
+                    font-size: 28px;
+                    accessible-label: "plus " + row.name;
+                    clicked => { root.inc(i); }
+                }
+            }
+        }
+    }
+
+    if flick.content-height > flick.height && -flick.content-y < flick.content-height - flick.height - 1px: Rectangle {
+        y: parent.height - 28px;
+        height: 28px;
+        background: Mk.beton-donker;
+        Text {
+            text: "MORE ↓";
+            color: Mk.grafiet;
+            font-size: 14px;
+            font-weight: 800;
+        }
+    }
+}
+
+// Agenda entry: coloured left column with the title, white content right.
+component Entry inherits Rectangle {
+    in property <string> kicker;
+    in property <string> title;
+    in property <color> light: Mk.beton-donker;
+    in property <color> deep: Mk.inkt;
+    background: Mk.wit;
+    HorizontalLayout {
+        Rectangle {
+            width: 380px;
+            background: root.light;
+            Rectangle { x: 0; width: 14px; background: root.deep; }
+            VerticalLayout {
+                padding: 40px;
+                padding-left: 54px;
+                spacing: 12px;
+                alignment: end;
+                Text {
+                    text: root.kicker;
+                    color: root.deep;
+                    font-size: 18px;
+                    font-weight: 800;
+                }
+                Text {
+                    text: root.title;
+                    color: Mk.inkt;
+                    font-family: Mk.serif;
+                    font-size: 54px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            @children
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "interface-stock";
+    width: 1280px;
+    height: 720px;
+    background: Mk.wit;
+    default-font-family: Mk.sans;
+
+    in property <Screen> screen: Screen.shop;
+    in property <string> htl-name;
+    in property <string> message;
+    in property <bool> message-error;
+    in property <string> searching;
+    in property <[CartRow]> rows;
+    in property <int> units;
+    in property <string> total;
+    in property <bool> volunteer;
+    in property <image> qr;
+    in property <string> cart-categories;
+    in property <string> done-summary;
+    in property <[Category]> categories;
+    in-out property <string> category: "ALL";
+    in property <[ProductTile]> all-products;
+    in property <[ProductTile]> products;
+
+    callback action(string, int);
+    callback pick(int);
+    callback select-category(string);
+
+    // --- ink top bar -------------------------------------------------------
+    Rectangle {
+        y: 0;
+        height: 72px;
+        background: Mk.wit;
+        Rectangle { y: parent.height - 1px; height: 1px; background: Mk.lijn; }
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 16px;
+            Image {
+                source: @image-url("assets/wordmark-ink.png");
+                width: 210px;
+                image-fit: contain;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                if root.message != "": Rectangle {
+                    width: min(parent.width, 640px);
+                    height: 44px;
+                    background: root.message-error ? Mk.rood : Mk.openlab;
+                    Text {
+                        width: parent.width - 28px;
+                        text: root.message;
+                        color: root.message-error ? Mk.wit : Mk.inkt;
+                        font-size: 19px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+            Text {
+                text: "TV PAGE";
+                color: Mk.grafiet;
+                font-size: 14px;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+            Press {
+                text: "◀";
+                width: 64px;
+                min-height: 56px;
+                radius: 0px;
+                fill: Mk.wit;
+                ink: Mk.inkt;
+                outline: Mk.lijn;
+                font-size: 20px;
+                accessible-label: "TV previous page";
+                clicked => { root.action("page-prev", 0); }
+            }
+            Press {
+                text: "▶";
+                width: 64px;
+                min-height: 56px;
+                radius: 0px;
+                fill: Mk.wit;
+                ink: Mk.inkt;
+                outline: Mk.lijn;
+                font-size: 20px;
+                accessible-label: "TV next page";
+                clicked => { root.action("page-next", 0); }
+            }
+        }
+    }
+
+    body := Rectangle {
+        y: 72px;
+        height: root.height - 72px;
+
+        // --- shop: bands | cards | cart ------------------------------------
+        if root.screen == Screen.shop: HorizontalLayout {
+            VerticalLayout {
+                width: 200px;
+                for c in root.categories: Rectangle {
+                    accessible-role: button;
+                    accessible-label: c.name;
+                    min-height: 72px;
+                    max-height: 132px;
+                    vertical-stretch: 1;
+                    background: band-touch.pressed ? c.light.darker(10%) : c.light;
+                    Rectangle {
+                        x: 0;
+                        width: c.name == root.category ? 16px : 0px;
+                        background: c.deep;
+                    }
+                    Text {
+                        x: 30px;
+                        y: parent.height - self.height - 16px;
+                        text: c.name;
+                        color: c.deep;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+                    if c.name == root.category: Text {
+                        x: parent.width - 34px;
+                        y: 14px;
+                        text: "●";
+                        color: Mk.inkt;
+                        font-size: 16px;
+                    }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: #00000022; }
+                    band-touch := TouchArea {
+                        clicked => { root.select-category(c.name); }
+                    }
+                }
+                Rectangle { background: Mk.beton; vertical-stretch: 0.01; }
+            }
+            grid := Rectangle {
+                horizontal-stretch: 1;
+                clip: true;
+                property <int> cols: 3;
+                property <length> pad: 16px;
+                property <length> gap: 12px;
+                property <length> tw: (self.width - 2 * self.pad - (self.cols - 1) * self.gap) / self.cols;
+                property <length> th: 194px;
+                gflick := Flickable {
+                    x: grid.pad;
+                    y: grid.pad;
+                    width: grid.width - 2 * grid.pad;
+                    height: grid.height - grid.pad;
+                    content-height: Math.ceil(root.products.length / grid.cols) * (grid.th + grid.gap);
+                    for p[i] in root.products: Card {
+                        x: mod(i, grid.cols) * (grid.tw + grid.gap);
+                        y: floor(i / grid.cols) * (grid.th + grid.gap);
+                        width: grid.tw;
+                        height: grid.th;
+                        item: p;
+                        picked(pk) => { root.pick(pk); }
+                    }
+                }
+                if gflick.content-height > gflick.height && -gflick.content-y < gflick.content-height - gflick.height - 1px: Rectangle {
+                    y: parent.height - 24px;
+                    height: 24px;
+                    background: Mk.beton-donker;
+                    Text {
+                        text: "MORE PRODUCTS ↓";
+                        color: Mk.grafiet;
+                        font-size: 14px;
+                        font-weight: 800;
+                    }
+                }
+            }
+            Rectangle {
+                width: 390px;
+                background: Mk.beton;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Text {
+                            text: "CART";
+                            color: Mk.inkt;
+                            font-size: 20px;
+                            font-weight: 800;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.units == 0 ? "empty" : root.units + (root.units == 1 ? " item" : " items");
+                            color: Mk.grafiet;
+                            font-size: 16px;
+                        }
+                    }
+                    if root.units == 0: Rectangle {
+                        vertical-stretch: 1;
+                        border-width: 2px;
+                        border-color: Mk.lijn;
+                        Text {
+                            width: parent.width - 40px;
+                            text: "Tap a product on the left, or scan its barcode.";
+                            color: Mk.grafiet;
+                            font-size: 20px;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    if root.units > 0: Entries {
+                        vertical-stretch: 1;
+                        rows: root.rows;
+                        editable: true;
+                        inc(i) => { root.action("inc", i); }
+                        dec(i) => { root.action("dec", i); }
+                    }
+                    HorizontalLayout {
+                        Text {
+                            text: "TOTAL";
+                            color: Mk.grafiet;
+                            font-size: 16px;
+                            font-weight: 800;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: root.volunteer ? "Free" : root.total;
+                            color: root.volunteer ? Mk.openlab-diep : Mk.inkt;
+                            font-family: Mk.serif;
+                            font-size: 48px;
+                            font-weight: 700;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Press {
+                            text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
+                            enabled: root.units > 0;
+                            radius: 0px;
+                            fill: Mk.openlab;
+                            ink: Mk.openlab-diep;
+                            outline: root.volunteer ? Mk.openlab-diep : transparent;
+                            outline-w: 3px;
+                            font-size: 18px;
+                            weight: 800;
+                            accessible-label: root.volunteer ? "VOLUNTEER: FREE" : "VOLUNTEER DRINK";
+                            clicked => { root.action("volunteer", 0); }
+                        }
+                        Press {
+                            text: "CANCEL";
+                            width: 130px;
+                            enabled: root.units > 0;
+                            radius: 0px;
+                            fill: Mk.wit;
+                            ink: Mk.rood;
+                            outline: Mk.rood;
+                            font-size: 18px;
+                            weight: 800;
+                            clicked => { root.action("cancel", 0); }
+                        }
+                    }
+                    Press {
+                        text: "CHECKOUT  →";
+                        enabled: root.units > 0;
+                        min-height: 84px;
+                        radius: 0px;
+                        fill: Mk.workshop-diep;
+                        font-size: 26px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
+            }
+        }
+
+        // --- cancel ----------------------------------------------------------
+        if root.screen == Screen.cancel-confirm: Entry {
+            kicker: "CANCEL";
+            title: "Empty the cart?";
+            light: #FBEAE8;
+            deep: Mk.rood;
+            VerticalLayout {
+                padding: 48px;
+                spacing: 24px;
+                Text {
+                    vertical-stretch: 1;
+                    text: root.units + (root.units == 1 ? " item leaves" : " items leave") + " the cart. Nothing is taken from stock.";
+                    color: Mk.inkt;
+                    font-size: 28px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Press {
+                        text: "← KEEP SHOPPING";
+                        min-height: 100px;
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.grafiet;
+                        font-size: 22px;
+                        weight: 800;
+                        clicked => { root.action("back", 0); }
+                    }
+                    Press {
+                        text: "YES, EMPTY IT";
+                        min-height: 100px;
+                        radius: 0px;
+                        fill: Mk.rood;
+                        font-size: 22px;
+                        weight: 800;
+                        clicked => { root.action("cancel", 0); }
+                    }
+                }
+            }
+        }
+
+        // --- checkout / oath -------------------------------------------------
+        if root.screen == Screen.checkout-confirm: Entry {
+            kicker: root.volunteer ? "VOLUNTEER DRINK" : "STEP 1 OF 2";
+            title: root.volunteer ? "The oath" : "Check your cart";
+            light: root.volunteer ? Mk.openlab : Mk.herstel;
+            deep: root.volunteer ? Mk.openlab-diep : Mk.herstel-diep;
+            VerticalLayout {
+                padding: 32px;
+                spacing: 14px;
+                if root.volunteer: Text {
+                    vertical-stretch: 1;
+                    text: "By my honour and the power vested in me, I solemnly swear by the spirit of HTL that I worked well today and deserve a free drink.";
+                    color: Mk.inkt;
+                    font-family: Mk.serif;
+                    font-size: 30px;
+                    font-weight: 500;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+                if !root.volunteer: Entries {
+                    vertical-stretch: 1;
+                    rows: root.rows;
+                    editable: false;
+                }
+                HorizontalLayout {
+                    Text {
+                        text: root.volunteer ? "NORMALLY " + root.total : "TOTAL";
+                        color: Mk.grafiet;
+                        font-size: 16px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.volunteer ? "Free" : root.total;
+                        color: root.volunteer ? Mk.openlab-diep : Mk.inkt;
+                        font-family: Mk.serif;
+                        font-size: 52px;
+                        font-weight: 700;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Press {
+                        text: "← BACK";
+                        width: 150px;
+                        min-height: 88px;
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.grafiet;
+                        font-size: 20px;
+                        weight: 800;
+                        clicked => { root.action("back", 0); }
+                    }
+                    Press {
+                        text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
+                        width: 190px;
+                        min-height: 88px;
+                        radius: 0px;
+                        fill: Mk.openlab;
+                        ink: Mk.openlab-diep;
+                        font-size: 20px;
+                        weight: 800;
+                        clicked => { root.action("volunteer", 0); }
+                    }
+                    Press {
+                        text: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
+                        min-height: 88px;
+                        radius: 0px;
+                        fill: root.volunteer ? Mk.openlab-diep : Mk.workshop-diep;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
+            }
+        }
+
+        if root.screen == Screen.processing: Entry {
+            kicker: "ONE MOMENT";
+            title: "Booking…";
+            light: Mk.workshop;
+            deep: Mk.workshop-diep;
+        }
+
+        // --- payment QR ------------------------------------------------------
+        if root.screen == Screen.qr: Entry {
+            kicker: "STEP 2 OF 2";
+            title: "Pay " + root.total;
+            light: Mk.workshop;
+            deep: Mk.workshop-diep;
+            HorizontalLayout {
+                padding: 32px;
+                spacing: 32px;
+                Image {
+                    width: 440px;
+                    source: root.qr;
+                    image-fit: contain;
+                    image-rendering: pixelated;
+                }
+                VerticalLayout {
+                    alignment: end;
+                    spacing: 16px;
+                    Text {
+                        text: "Scan with Wero or your banking app. The amount is filled in.";
+                        color: Mk.inkt;
+                        font-size: 22px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.cart-categories;
+                        color: Mk.grafiet;
+                        font-size: 14px;
+                        font-weight: 800;
+                        wrap: word-wrap;
+                    }
+                    Press {
+                        text: "DONE";
+                        min-height: 110px;
+                        radius: 0px;
+                        fill: Mk.workshop-diep;
+                        font-size: 30px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
+            }
+        }
+
+        // --- did you pay? ----------------------------------------------------
+        if root.screen == Screen.pay-confirm: Entry {
+            kicker: "LAST CHECK";
+            title: "Did you pay " + root.total + "?";
+            light: Mk.herstel;
+            deep: Mk.herstel-diep;
+            VerticalLayout {
+                padding: 48px;
+                spacing: 24px;
+                Text {
+                    vertical-stretch: 1;
+                    text: "Only tap YES once your banking app says the payment went through.";
+                    color: Mk.inkt;
+                    font-size: 28px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Press {
+                        text: "← NOT YET";
+                        min-height: 110px;
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.grafiet;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("back", 0); }
+                    }
+                    Press {
+                        text: "YES, I PAID";
+                        min-height: 110px;
+                        radius: 0px;
+                        fill: Mk.openlab-diep;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
+            }
+        }
+
+        if root.screen == Screen.volunteer-done: Entry {
+            kicker: "THANK YOU";
+            title: "Enjoy your drink!";
+            light: Mk.openlab;
+            deep: Mk.openlab-diep;
+            Text {
+                x: 48px;
+                text: root.done-summary + " — on the house";
+                color: Mk.openlab-diep;
+                font-family: Mk.serif;
+                font-size: 40px;
+                font-weight: 700;
+            }
+        }
+    }
+
+    if root.searching != "": Rectangle {
+        background: #ffffffe6;
+        TouchArea { }
+        VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            Text {
+                text: "LOOKING IT UP";
+                color: Mk.workshop-diep;
+                font-size: 22px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.searching;
+                color: Mk.inkt;
+                font-family: Mk.serif;
+                font-size: 56px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
