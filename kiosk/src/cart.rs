@@ -15,9 +15,6 @@ pub struct Part {
     pub category: Option<i64>,
     #[serde(default)]
     pub category_detail: Option<Value>,
-    /// Stock item that checkout removes from; pinned when the part is added.
-    #[serde(rename = "_stock_item_pk", default)]
-    pub stock_item_pk: Option<i64>,
 }
 
 impl Part {
@@ -29,10 +26,6 @@ impl Part {
             .as_str()
             .map(str::to_lowercase)
     }
-
-    fn same_item(&self, other: &Part) -> bool {
-        self.pk == other.pk && self.stock_item_pk == other.stock_item_pk
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -43,18 +36,19 @@ pub struct Cart {
 }
 
 impl Cart {
+    /// One line per part: checkout spreads it over the part's stock items.
     pub fn add(&mut self, part: Part) {
-        match self.items.iter_mut().find(|(p, _)| p.same_item(&part)) {
+        match self.items.iter_mut().find(|(p, _)| p.pk == part.pk) {
             Some((_, qty)) => *qty += 1,
             None => self.items.push((part, 1)),
         }
     }
 
-    /// Units of this exact stock item already in the cart.
+    /// Units of this part already in the cart.
     pub fn quantity_of(&self, part: &Part) -> u32 {
         self.items
             .iter()
-            .find(|(p, _)| p.same_item(part))
+            .find(|(p, _)| p.pk == part.pk)
             .map_or(0, |(_, q)| *q)
     }
 
@@ -96,25 +90,25 @@ impl Cart {
 mod tests {
     use super::*;
 
-    fn part(pk: i64, stock: i64) -> Part {
-        Part { pk, name: format!("P{pk}"), stock_item_pk: Some(stock), ..Default::default() }
+    fn part(pk: i64) -> Part {
+        Part { pk, name: format!("P{pk}"), ..Default::default() }
     }
 
     #[test]
-    fn same_stock_item_stacks() {
+    fn same_part_stacks() {
         let mut c = Cart::default();
-        c.add(part(1, 10));
-        c.add(part(1, 10));
-        c.add(part(1, 11));
+        c.add(part(1));
+        c.add(part(1));
+        c.add(part(2));
         assert_eq!(c.items.len(), 2);
-        assert_eq!(c.quantity_of(&part(1, 10)), 2);
+        assert_eq!(c.quantity_of(&part(1)), 2);
     }
 
     #[test]
     fn remove_last_takes_one_unit() {
         let mut c = Cart::default();
-        c.add(part(1, 10));
-        c.add(part(1, 10));
+        c.add(part(1));
+        c.add(part(1));
         c.remove_last();
         assert_eq!(c.units(), 1);
         c.remove_last();

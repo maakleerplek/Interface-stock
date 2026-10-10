@@ -26,9 +26,8 @@ pub trait Backend: Send {
     /// The part behind a grid tile.
     fn part(&self, pk: i64) -> Option<Part>;
     fn lookup(&self, barcode: &str) -> Option<Part>;
-    /// (stock item pk, quantity) of the fullest in-stock item of this part.
-    /// `(None, 0.0)` means out of stock.
-    fn stock(&self, part_pk: i64) -> Result<(Option<i64>, f64), StockLookupError>;
+    /// Units in stock over all of the part's stock items; 0.0 = out of stock.
+    fn stock(&self, part_pk: i64) -> Result<f64, StockLookupError>;
     /// Selling price; 0.0 when InvenTree has no sale price for the part.
     fn price(&self, part: &Part) -> f64;
     fn category(&self, part: &Part) -> String;
@@ -153,9 +152,8 @@ impl Backend for Demo {
             .map(Self::to_part)
     }
 
-    fn stock(&self, part_pk: i64) -> Result<(Option<i64>, f64), StockLookupError> {
-        let qty = *self.stock.lock().unwrap().get(&part_pk).unwrap_or(&0.0);
-        Ok(if qty > 0.0 { (Some(100_000 + part_pk), qty) } else { (None, 0.0) })
+    fn stock(&self, part_pk: i64) -> Result<f64, StockLookupError> {
+        Ok(*self.stock.lock().unwrap().get(&part_pk).unwrap_or(&0.0))
     }
 
     fn price(&self, part: &Part) -> f64 {

@@ -116,12 +116,12 @@ impl Machine {
 
     fn info(&mut self, text: impl Into<String>) {
         self.message = Some(Message { text: text.into(), error: false });
-        self.message_at = Instant::now();
+        self.message_at = self.last_interaction;
     }
 
     fn error(&mut self, text: impl Into<String>) {
         self.message = Some(Message { text: text.into(), error: true });
-        self.message_at = Instant::now();
+        self.message_at = self.last_interaction;
     }
 
     fn reset(&mut self, now: Instant) {
@@ -151,9 +151,9 @@ impl Machine {
             return true;
         }
         if self.busy() && self.state != State::Processing && now - self.last_interaction > TIMEOUT {
+            self.last_interaction = now;
             self.reset(now);
             self.info("Timeout: cart cleared");
-            self.last_interaction = now;
             return true;
         }
         if self.message.is_some() && now.saturating_duration_since(self.message_at) >= MESSAGE_FOR {
@@ -164,16 +164,14 @@ impl Machine {
     }
 
     /// Add one unit of `part`, but only if InvenTree actually has it.
-    fn try_add(&mut self, be: &dyn Backend, mut part: Part) -> Result<(), String> {
-        let (stock_pk, available) = be
+    fn try_add(&mut self, be: &dyn Backend, part: Part) -> Result<(), String> {
+        let available = be
             .stock(part.pk)
             .map_err(|_| "Cannot reach InvenTree. Try again.".to_string())?;
         let name = part.name.clone();
-        let Some(stock_pk) = stock_pk.filter(|_| available > 0.0) else {
+        if available <= 0.0 {
             return Err(format!("{name} is out of stock."));
-        };
-        // Pin the stock item we just counted, so checkout removes from that one.
-        part.stock_item_pk = Some(stock_pk);
+        }
         if (self.cart.quantity_of(&part) + 1) as f64 > available {
             return Err(format!("Only {}x {name} in stock.", available as u32));
         }
@@ -324,6 +322,7 @@ impl Machine {
         if self.state != State::Processing {
             return;
         }
+        self.last_interaction = now;
         match be.checkout(&self.cart) {
             Ok(()) if self.cart.volunteer => {
                 self.done_summary = (self.cart.units(), self.cart.total(|p| be.price(p)));
@@ -339,7 +338,6 @@ impl Machine {
                 self.error(format!("Checkout failed: {e}"));
             }
         }
-        self.last_interaction = now;
     }
 }
 

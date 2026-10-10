@@ -56,6 +56,10 @@ impl Tv {
                         // A client that never finishes the handshake must not
                         // block the next one.
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                        // A TV browser that stops reading (out of memory, the
+                        // white screen) must not block the kiosk on a full send
+                        // buffer: after this a send fails and the client is dropped.
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                         if let Ok(mut ws) = tungstenite::accept(stream) {
                             let mut inner = accept.inner.lock().unwrap();
                             if let Some(b) = inner.busy {

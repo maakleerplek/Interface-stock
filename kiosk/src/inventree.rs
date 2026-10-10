@@ -146,16 +146,32 @@ fn num(v: &Value) -> Option<f64> {
 }
 
 /// The `/api/stock/remove/` payload. Pure, so it can be tested.
-pub fn removal_payload(lines: &[(i64, u32)], volunteer: bool, htl_name: &str) -> Value {
+pub fn removal_payload(lines: &[(i64, f64)], volunteer: bool, htl_name: &str) -> Value {
     let notes = if volunteer {
         format!("Volunteer drink via Interface-stock ({htl_name})")
     } else {
         format!("Purchased via Interface-stock ({htl_name})")
     };
     json!({
-        "items": lines.iter().map(|(pk, q)| json!({"pk": pk, "quantity": *q as f64})).collect::<Vec<_>>(),
+        "items": lines.iter().map(|(pk, q)| json!({"pk": pk, "quantity": q})).collect::<Vec<_>>(),
         "notes": notes,
     })
+}
+
+/// Spread `qty` over a part's stock items, fullest first. None = not enough stock.
+pub fn spread(mut stock: Vec<(i64, f64)>, qty: u32) -> Option<Vec<(i64, f64)>> {
+    stock.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut left = qty as f64;
+    let mut out = vec![];
+    for (pk, have) in stock {
+        if left <= 0.0 {
+            break;
+        }
+        let take = left.min(have);
+        out.push((pk, take));
+        left -= take;
+    }
+    (left <= 0.0).then_some(out)
 }
 
 impl Shared {
@@ -223,8 +239,9 @@ impl Shared {
 
     /// Download a thumbnail once into the image cache.
     fn thumbnail(&self, pk: i64, path: &str) -> Option<PathBuf> {
-        let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("png");
-        let file = self.cfg.image_dir.join(format!("part_{pk}.{ext}"));
+        // Named after InvenTree's file, so a new photo (a new file name) is downloaded again.
+        let base = Path::new(path).file_name().and_then(|e| e.to_str()).unwrap_or("image.png");
+        let file = self.cfg.image_dir.join(format!("part_{pk}_{base}"));
         if file.exists() {
             return Some(file);
         }
@@ -297,16 +314,16 @@ impl Shared {
         Ok(())
     }
 
-    /// Fullest in-stock item of a part. `(None, 0.0)` = out of stock.
-    fn stock(&self, part_pk: i64) -> Result<(Option<i64>, f64), StockLookupError> {
+    /// (stock item pk, quantity) of every in-stock item of a part.
+    fn stock_items(&self, part_pk: i64) -> Result<Vec<(i64, f64)>, StockLookupError> {
         let v = self
             .get(&format!("/api/stock/?part={part_pk}&in_stock=true"))
             .map_err(|_| StockLookupError)?;
-        let best = results(v)
+        Ok(results(v)
             .into_iter()
-            .map(|s| (s.get("pk").and_then(Value::as_i64), s.get("quantity").and_then(num).unwrap_or(0.0)))
-            .max_by(|a, b| a.1.total_cmp(&b.1));
-        Ok(best.unwrap_or((None, 0.0)))
+            .filter_map(|s| Some((s.get("pk")?.as_i64()?, s.get("quantity").and_then(num).unwrap_or(0.0))))
+            .filter(|s| s.1 > 0.0)
+            .collect())
     }
 
     /// `/api/barcode/`, then the fallbacks of the Python version in
@@ -321,9 +338,7 @@ impl Shared {
                     .or_else(|| inst.get("name").and_then(|_| self.part_from(inst)))
             };
             if let Some(s) = res.get("stockitem") {
-                let spk = s.get("pk").or_else(|| s.get("instance")?.get("pk")).and_then(Value::as_i64);
-                if let Some(mut p) = from(s) {
-                    p.stock_item_pk = p.stock_item_pk.or(spk);
+                if let Some(p) = from(s) {
                     return Some(p);
                 }
             } else if let Some(p) = res.get("part") {
@@ -363,12 +378,9 @@ impl Shared {
                 let item = results(found)
                     .into_iter()
                     .find(|i| i.get("barcode").and_then(Value::as_str) == Some(code))?;
-                let mut p = item
-                    .get("part_detail")
+                item.get("part_detail")
                     .and_then(|d| self.part_from(d))
-                    .or_else(|| self.fetch_part(item.get("part")?.as_i64()?))?;
-                p.stock_item_pk = item.get("pk").and_then(Value::as_i64);
-                Some(p)
+                    .or_else(|| self.fetch_part(item.get("part")?.as_i64()?))
             });
             tasks
                 .into_iter()
@@ -475,9 +487,8 @@ impl Backend for InvenTree {
 
     fn lookup(&self, barcode: &str) -> Option<Part> {
         let sh = &self.sh;
-        if let Some(p) = sh.cache.lock().unwrap().get(barcode) {
-            return Some(p);
-        }
+        // The catalog (reloaded every 5 min) wins over the cache: a code that
+        // moved to another part stayed on the old one forever otherwise.
         let in_catalog = {
             let cat = sh.catalog.read().unwrap();
             cat.by_code
@@ -488,6 +499,13 @@ impl Backend for InvenTree {
         if let Some(p) = in_catalog {
             sh.cache.lock().unwrap().set(barcode, &p);
             return Some(p);
+        }
+        // Not in the catalog: the cache only when the catalog never loaded
+        // (InvenTree unreachable since start), else ask InvenTree.
+        if !sh.catalog.read().unwrap().loaded {
+            if let Some(p) = sh.cache.lock().unwrap().get(barcode) {
+                return Some(p);
+            }
         }
         if sh.cfg.token.is_empty() {
             return None;
@@ -511,8 +529,8 @@ impl Backend for InvenTree {
         }
     }
 
-    fn stock(&self, part_pk: i64) -> Result<(Option<i64>, f64), StockLookupError> {
-        self.sh.stock(part_pk)
+    fn stock(&self, part_pk: i64) -> Result<f64, StockLookupError> {
+        Ok(self.sh.stock_items(part_pk)?.iter().map(|s| s.1).sum())
     }
 
     /// No fallback to pricing_min/max on purpose: those are cost figures,
@@ -552,19 +570,26 @@ impl Backend for InvenTree {
         if sh.cfg.token.is_empty() {
             return Err("INVENTREE_TOKEN not configured".into());
         }
+        // A paid line without a sale price would go out for free: price()
+        // shows 0 for it on purpose, so refuse it here instead of booking it.
+        if !cart.volunteer {
+            let prices = &sh.catalog.read().unwrap().prices;
+            if let Some((p, _)) = cart.items.iter().find(|(p, _)| !prices.contains_key(&p.pk)) {
+                return Err(format!("No price for {}. Ask a volunteer.", p.name));
+            }
+        }
         // Re-check every line against live stock. InvenTree clamps a removal
         // at zero instead of refusing it, so without this a cart could be
         // charged for stock that is no longer there.
         let mut lines = vec![];
         for (part, qty) in &cart.items {
-            let (spk, available) = sh.stock(part.pk).map_err(|_| "Cannot reach InvenTree to verify stock".to_string())?;
-            let Some(spk) = spk.filter(|_| available > 0.0) else {
+            let stock = sh.stock_items(part.pk).map_err(|_| "Cannot reach InvenTree to verify stock".to_string())?;
+            let available: f64 = stock.iter().map(|s| s.1).sum();
+            if available <= 0.0 {
                 return Err(format!("{} is out of stock", part.name));
-            };
-            if available < *qty as f64 {
-                return Err(format!("Only {}x {} left", available as u32, part.name));
             }
-            lines.push((spk, *qty));
+            let spread = spread(stock, *qty).ok_or_else(|| format!("Only {}x {} left", available as u32, part.name))?;
+            lines.extend(spread);
         }
         if lines.is_empty() {
             return Err("No stock items found to remove".into());
@@ -580,7 +605,7 @@ impl Backend for InvenTree {
                 sh.changelog("volunteer", &part.name, *qty, None);
             } else {
                 let unit = self.price(part);
-                sh.changelog("checkout", &part.name, *qty, (unit > 0.0).then(|| unit * *qty as f64));
+                sh.changelog("checkout", &part.name, *qty, (unit > 0.0).then_some(unit * *qty as f64));
             }
         }
         // Show the new stock levels in the grid soon.
@@ -595,14 +620,22 @@ mod tests {
 
     #[test]
     fn payload_matches_python_version() {
-        let p = removal_payload(&[(101, 2), (205, 1)], false, "HTL Makerspace");
+        let p = removal_payload(&[(101, 2.0), (205, 1.0)], false, "HTL Makerspace");
         assert_eq!(
             p,
             json!({"items": [{"pk": 101, "quantity": 2.0}, {"pk": 205, "quantity": 1.0}],
                    "notes": "Purchased via Interface-stock (HTL Makerspace)"})
         );
-        let v = removal_payload(&[(7, 1)], true, "HTL");
+        let v = removal_payload(&[(7, 1.0)], true, "HTL");
         assert_eq!(v["notes"], "Volunteer drink via Interface-stock (HTL)");
+    }
+
+    #[test]
+    fn spread_takes_fullest_first_across_items() {
+        assert_eq!(spread(vec![(1, 2.0), (2, 3.0)], 4), Some(vec![(2, 3.0), (1, 1.0)]));
+        assert_eq!(spread(vec![(1, 2.0), (2, 3.0)], 5), Some(vec![(2, 3.0), (1, 2.0)]));
+        assert_eq!(spread(vec![(1, 2.0), (2, 3.0)], 6), None);
+        assert_eq!(spread(vec![(1, 5.0)], 1), Some(vec![(1, 1.0)]));
     }
 
     #[test]
@@ -626,7 +659,7 @@ mod tests {
         .unwrap();
         let mut c = BarcodeCache::load(path.clone());
         let p = c.get("5000112545326").unwrap();
-        assert_eq!((p.pk, p.name.as_str(), p.stock_item_pk), (8, "Coca Cola", Some(41)));
+        assert_eq!((p.pk, p.name.as_str()), (8, "Coca Cola"));
         c.set("NEW", &p);
         c.flush(true);
         let again = BarcodeCache::load(path);

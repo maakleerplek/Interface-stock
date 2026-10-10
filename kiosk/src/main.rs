@@ -51,7 +51,7 @@ fn check(it: &InvenTree) -> bool {
             c.part.name,
             interface_stock::format_price(c.price),
             c.category,
-            stock.as_ref().map(|s| s.1).map_err(|_| "unreachable"),
+            stock.as_ref().map_err(|_| "unreachable"),
             if c.image.is_some() { "yes" } else { "no" }
         );
         ok &= stock.is_ok();
