@@ -93,85 +93,57 @@ def test_qr_generation():
 
 def test_price_formatting():
     """Test price extraction and formatting"""
-    from barcode_inventree import extract_price, format_price
-    
+    from unittest.mock import patch
+    import barcode_inventree as bi
+
     print("\nTesting price functions...")
-    
-    test_cases = [
-        ({'pricing_max': '15.00', 'pricing_min': '10.50'}, 15.00, "€15.00"),
-        ({'pricing_min': '10.50'}, 10.50, "€10.50"),
-        ({'sell_price': '20.00'}, 20.00, "€20.00"),
-        ({}, 0.0, "-"),
-        ({'pricing_min': 'invalid'}, 0.0, "-"),
-    ]
-    
-    all_passed = True
-    for part, expected_price, expected_format in test_cases:
-        price = extract_price(part)
-        formatted = format_price(price)
-        if price == expected_price and formatted == expected_format:
-            print(f"   ✓ {part} -> {formatted}")
-        else:
-            print(f"   ✗ {part} -> Expected {expected_format}, got {formatted}")
-            all_passed = False
-    
-    if all_passed:
-        print("✓ All price tests passed!")
+    # The price is the sale price break only; InvenTree's cost fields are never a fallback.
+    with patch.object(bi, 'refresh_sale_prices'), patch.object(bi, '_SALE_PRICES', {7: 2.5}):
+        assert bi.extract_price({'pk': 7}) == 2.5
+        assert bi.extract_price({'pk': 8, 'pricing_max': '15.00'}) == 0.0
+        assert bi.extract_price({}) == 0.0
+    assert bi.format_price(2.5) == "€2.50" and bi.format_price(0.0) == "-"
+    print("✓ All price tests passed!")
 
 def test_stock_removal():
-    """Test the stock removal API call logic"""
+    """Checkout spreads a line over the part's stock items and refuses unpriced lines."""
     from unittest.mock import patch, MagicMock
-    from barcode_inventree import ShoppingCart, remove_stock_from_inventree
-    
+    import barcode_inventree as bi
+
     print("\nTesting Stock Removal Logic...")
-    cart = ShoppingCart()
-    # Add Item 1 twice (same stock item)
-    cart.add_item({'pk': 1, 'name': 'Item 1', '_stock_item_pk': 101})
-    cart.add_item({'pk': 1, 'name': 'Item 1', '_stock_item_pk': 101})
-    # Add Item 2 once
-    cart.add_item({'pk': 2, 'name': 'Item 2', '_stock_item_pk': 102})
-    
-    with patch('requests.post') as mock_post:
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_post.return_value = mock_response
-        
-        # Also need to mock find_stock_item_for_part if we don't have _stock_item_pk
-        # but here we provide it.
-        
-        success, err_msg = remove_stock_from_inventree(cart)
-        
-        if success:
-            print("   ✓ remove_stock_from_inventree returned True")
-        else:
-            print(f"   ✗ remove_stock_from_inventree returned False. Msg: {err_msg}")
-            return
-            
-        # Verify call arguments
-        args, kwargs = mock_post.call_args
-        payload = kwargs.get('json')
-        
-        print(f"   Payload sent: {payload}")
-        
-        # We expect 2 entries in items (Item 1 with qty 2, Item 2 with qty 1)
-        if len(payload['items']) == 2:
-            print("   ✓ Correct number of items in payload (2)")
-        else:
-            print(f"   ✗ Expected 2 items, got {len(payload['items'])}")
-            
-        # Check specific items
-        items = sorted(payload['items'], key=lambda x: x['pk'])
-        if items[0]['pk'] == 101 and items[0]['quantity'] == 2.0:
-            print("   ✓ Item 101 (Item 1) has correct quantity (2.0)")
-        else:
-            print(f"   ✗ Item 101 has wrong quantity or PK")
-            
-        if items[1]['pk'] == 102 and items[1]['quantity'] == 1.0:
-            print("   ✓ Item 102 (Item 2) has correct quantity (1.0)")
-        else:
-            print(f"   ✗ Item 102 has wrong quantity or PK")
-            
+    stock = {1: [(101, 2.0), (111, 3.0)], 2: [(102, 5.0)]}
+    with patch.object(bi, 'find_stock_items', side_effect=lambda pk: sorted(stock[pk], key=lambda s: -s[1])), \
+         patch.object(bi, 'refresh_sale_prices'), \
+         patch.object(bi, '_SALE_PRICES', {1: 2.0, 2: 3.0}), \
+         patch.object(bi, 'INVENTREE_TOKEN', 'test'), \
+         patch.object(bi, 'send_changelog_event'), \
+         patch.object(bi.API_SESSION, 'post') as post:
+        post.return_value = MagicMock(status_code=201)
+        cart = bi.ShoppingCart()
+        for _ in range(4):
+            cart.add_item({'pk': 1, 'name': 'Item 1'})
+        cart.add_item({'pk': 2, 'name': 'Item 2'})
+        assert len(cart.items) == 2, "one cart line per part"
+
+        ok, err = bi.remove_stock_from_inventree(cart)
+        assert ok, err
+        items = post.call_args.kwargs['json']['items']
+        assert items == [{'pk': 111, 'quantity': 3.0}, {'pk': 101, 'quantity': 1.0},
+                         {'pk': 102, 'quantity': 1.0}], items
+
+        cart.add_item({'pk': 1, 'name': 'Item 1'})  # 5 of 5 in stock: still fine
+        assert bi.remove_stock_from_inventree(cart)[0]
+        cart.add_item({'pk': 1, 'name': 'Item 1'})  # 6 of 5
+        ok, err = bi.remove_stock_from_inventree(cart)
+        assert not ok and 'Only 5x' in err, err
+
+        post.reset_mock()
+        cart = bi.ShoppingCart()
+        cart.add_item({'pk': 2, 'name': 'Item 2'})
+        cart.add_item({'pk': 3, 'name': 'No price'})
+        ok, err = bi.remove_stock_from_inventree(cart)
+        assert not ok and 'No price for No price' in err, err
+        post.assert_not_called()
     print("✓ Stock removal test passed!")
 
 def test_volunteer_flow():
@@ -182,7 +154,7 @@ def test_volunteer_flow():
     print("\nTesting Volunteer Flow...")
     drink = {'pk': 13, 'name': 'Ice Tea Peach'}
     with patch.object(bi, 'get_item_by_barcode', side_effect=lambda b: dict(drink)), \
-         patch.object(bi, 'find_stock_item_with_quantity', return_value=(501, 24.0)), \
+         patch.object(bi, 'find_stock_items', return_value=[(501, 24.0)]), \
          patch.object(bi, 'INVENTREE_TOKEN', 'test'), \
          patch.object(bi, 'send_changelog_event') as events, \
          patch.object(bi.API_SESSION, 'post') as post:
