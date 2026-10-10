@@ -244,31 +244,14 @@ def _center_text(draw, y, text, font, fill=COL_FG, area_width=L_WIDTH):
     draw.text(((area_width - w) / 2, y), text, font=font, fill=fill)
 
 # --- 1. LCD Configuration ---
-def find_lib_path():
-    for root_dir in ['.', 'lcd_assets', 'LCD_Module_code']:
-        if not os.path.exists(root_dir): continue
-        for config_name in ['lcdconfig.py', 'tp_config.py']:
-            search_pattern = os.path.join(os.getcwd(), root_dir, '**', config_name)
-            matches = glob.glob(search_pattern, recursive=True)
-            if matches:
-                lib_dir = os.path.dirname(matches[0])
-                if os.path.basename(lib_dir) == 'lib': return os.path.dirname(lib_dir)
-                return lib_dir
-    return None
-
-lib_path = find_lib_path()
-HAS_LCD = False
-if lib_path and os.path.exists(lib_path):
-    sys.path.append(lib_path)
-    try:
-        from lib import lcdconfig as config
-        try:
-            from lib import LCD_2inch4 as LCD
-        except ImportError:
-            from lib import LCD_2in4 as LCD
-        HAS_LCD = True
-    except ImportError:
-        pass
+# The driver ships in lib/ next to this file. Without the Pi's SPI/GPIO modules
+# (a laptop) the import fails and we run in terminal mode.
+try:
+    from lib import LCD_2inch4 as LCD
+    HAS_LCD = True
+except ImportError as e:
+    print(f"[lcd] driver not loaded ({e}) - continuing without a display")
+    HAS_LCD = False
 
 # --- Barcode Cache ---
 class BarcodeCache:
@@ -327,14 +310,10 @@ class BarcodeCache:
             essential = {
                 "pk": part_detail.get("pk"),
                 "name": part_detail.get("name"),
-                "pricing_min": part_detail.get("pricing_min"),
-                "pricing_max": part_detail.get("pricing_max"),
-                "sell_price": part_detail.get("sell_price"),
                 "thumbnail": part_detail.get("thumbnail"),
                 "image": part_detail.get("image"),
                 "category_detail": part_detail.get("category_detail"),
                 "category": part_detail.get("category"),
-                "_stock_item_pk": part_detail.get("_stock_item_pk"),
             }
             self.cache[barcode] = essential
             self.save()
@@ -383,9 +362,7 @@ def get_item_by_barcode(barcode):
             part = None
             if "stockitem" in res:
                 s_obj = res["stockitem"]
-                stock_item_pk = s_obj.get("pk") or (s_obj.get("instance", {}).get("pk") if isinstance(s_obj.get("instance"), dict) else None)
                 part = extract_from_obj(s_obj)
-                if part and stock_item_pk: part["_stock_item_pk"] = stock_item_pk
             elif "part" in res:
                 p_obj = res["part"]
                 if isinstance(p_obj, dict):
@@ -394,8 +371,6 @@ def get_item_by_barcode(barcode):
                 if not part: part = fetch_part_details(p_obj)
             
             if part:
-                if not part.get('_stock_item_pk'):
-                    part['_stock_item_pk'] = find_stock_item_for_part(part.get('pk'))
                 BARCODE_CACHE.set(barcode, part)
                 return part
     except Exception: pass
@@ -440,10 +415,8 @@ def get_item_by_barcode(barcode):
             results = data if isinstance(data, list) else data.get("results", [])
             for item in results:
                 if item.get("barcode") == barcode:
-                    stock_item_pk = item.get("pk")
                     part = item.get("part_detail") or fetch_part_details(item.get("part"))
                     if part:
-                        part["_stock_item_pk"] = stock_item_pk
                         return part
         except Exception: pass
         return None
@@ -460,8 +433,6 @@ def get_item_by_barcode(barcode):
         if result:
             # Cancel remaining futures (best-effort)
             for f in tasks: f.cancel()
-            if not result.get('_stock_item_pk'):
-                result['_stock_item_pk'] = find_stock_item_for_part(result.get('pk'))
             BARCODE_CACHE.set(barcode, result)
             return result
 
@@ -604,15 +575,16 @@ class StockLookupError(Exception):
     """InvenTree could not be reached, so the stock level is unknown."""
 
 
-def find_stock_item_with_quantity(part_id):
-    """Return (stock_item_pk, quantity) for the fullest in-stock item of this part.
+def find_stock_items(part_id):
+    """[(stock_item_pk, quantity)] of this part's in-stock items, fullest first.
 
-    (None, 0.0) means the part genuinely has no stock left. A failed API call raises
+    A part's stock is often split (old box + new delivery), so callers count all of
+    them. [] means the part genuinely has no stock left. A failed API call raises
     StockLookupError instead, so "out of stock" is never mistaken for "server down" —
     the caller must refuse the sale in both cases, but says something different.
     """
     if not part_id:
-        return None, 0.0
+        return []
     url = f"{INVENTREE_URL}/api/stock/?part={part_id}&in_stock=true"
     try:
         response = API_SESSION.get(url, timeout=5)
@@ -625,19 +597,9 @@ def find_stock_item_with_quantity(part_id):
     except Exception as exc:
         raise StockLookupError("bad JSON") from exc
     results = items if isinstance(items, list) else items.get("results", [])
-    if not results:
-        return None, 0.0
-    results.sort(key=lambda x: float(x.get('quantity', 0)), reverse=True)
-    best = results[0]
-    return best.get('pk'), float(best.get('quantity', 0) or 0)
+    stock = [(r.get('pk'), float(r.get('quantity') or 0)) for r in results]
+    return sorted([s for s in stock if s[1] > 0], key=lambda s: s[1], reverse=True)
 
-
-def find_stock_item_for_part(part_id):
-    try:
-        pk, _ = find_stock_item_with_quantity(part_id)
-    except StockLookupError:
-        return None
-    return pk
 
 def send_changelog_event(action, item_name, quantity, price=None):
     if not TV_PRESENTATION_URL: return
@@ -670,15 +632,12 @@ def press_tv_key(name):
         except Exception: pass
     threading.Thread(target=_press, daemon=True).start()
 
-def send_tv_page(action):
-    press_tv_key(action)
-
 _kiosk_busy = None  # last state sent to the TV; None = nothing sent yet
 
-def send_kiosk_state(busy, cart_count):
+def send_kiosk_state(busy):
     press_tv_key("busy" if busy else "idle")
 
-def report_kiosk_state(state, cart):
+def report_kiosk_state(state):
     """Tell the TV when the kiosk goes from idle to busy or back. The payment
     QR counts as idle: the sale is booked by then, and the kiosk only leaves
     that screen on the next scan, which could leave the TV paused for hours."""
@@ -686,14 +645,14 @@ def report_kiosk_state(state, cart):
     busy = state not in (AppState.IDLE, AppState.QR_DISPLAY)
     if busy != _kiosk_busy:
         _kiosk_busy = busy
-        send_kiosk_state(busy, len(cart.items))
+        send_kiosk_state(busy)
 
-def start_kiosk_heartbeat(cart):
+def start_kiosk_heartbeat():
     def _beat():
         while True:
             time.sleep(KIOSK_HEARTBEAT_SECONDS)
             if _kiosk_busy is not None:
-                send_kiosk_state(_kiosk_busy, len(cart.items))
+                send_kiosk_state(_kiosk_busy)
     threading.Thread(target=_beat, daemon=True).start()
 
 def remove_stock_from_inventree(cart):
@@ -705,18 +664,32 @@ def remove_stock_from_inventree(cart):
     # Re-check every line against live stock. InvenTree clamps a removal at zero
     # instead of refusing it, so without this a cart can be charged for stock that
     # is no longer there. Refuse the whole cart rather than quietly dropping a line.
+    # A paid line without a sale price would go out for free: extract_price()
+    # shows 0 for it on purpose, so refuse here instead of booking it.
+    if not cart.volunteer:
+        refresh_sale_prices(force=True)
+        for part_detail, _ in cart.items:
+            if part_detail.get('pk') not in _SALE_PRICES:
+                return False, f"No price for {part_detail.get('name', 'item')}. Ask a volunteer."
+
     items_to_remove = []
     for part_detail, quantity in cart.items:
         name = part_detail.get('name', 'item')
         try:
-            stock_item_pk, available = find_stock_item_with_quantity(part_detail.get('pk'))
+            stock = find_stock_items(part_detail.get('pk'))
         except StockLookupError:
             return False, "Cannot reach InvenTree to verify stock"
-        if stock_item_pk is None or available <= 0:
+        available = sum(q for _, q in stock)
+        if available <= 0:
             return False, f"{name} is out of stock"
         if available < quantity:
             return False, f"Only {int(available)}x {name} left"
-        items_to_remove.append({"pk": stock_item_pk, "quantity": float(quantity)})
+        left = float(quantity)
+        for stock_item_pk, q in stock:  # fullest first
+            take = min(left, q)
+            items_to_remove.append({"pk": stock_item_pk, "quantity": take})
+            left -= take
+            if left <= 0: break
 
     if not items_to_remove: return False, "No stock items found to remove"
 
@@ -746,23 +719,19 @@ class ShoppingCart:
         self.items = []
         self.volunteer = False  # whole cart is a free volunteer drink
 
+    # One line per part: checkout spreads it over the part's stock items.
     def add_item(self, part_detail):
         pk = part_detail.get('pk')
-        spk = part_detail.get('_stock_item_pk')
         for i, (item, qty) in enumerate(self.items):
-            if item.get('pk') == pk and item.get('_stock_item_pk') == spk:
+            if item.get('pk') == pk:
                 self.items[i] = (item, qty + 1)
                 return
         self.items.append((part_detail, 1))
 
     def quantity_of(self, part_detail):
-        """Units of this exact stock item already in the cart."""
+        """Units of this part already in the cart."""
         pk = part_detail.get('pk')
-        spk = part_detail.get('_stock_item_pk')
-        for item, qty in self.items:
-            if item.get('pk') == pk and item.get('_stock_item_pk') == spk:
-                return qty
-        return 0
+        return next((qty for item, qty in self.items if item.get('pk') == pk), 0)
 
     def remove_last_item(self):
         if not self.items: return None
@@ -1226,17 +1195,14 @@ def try_add_to_cart(cart, part):
     is what the LCD renderer keys on to show a warning screen.
     """
     try:
-        stock_pk, available = find_stock_item_with_quantity(part.get('pk'))
+        stock = find_stock_items(part.get('pk'))
     except StockLookupError:
         return False, "ERROR: Cannot reach InvenTree. Try again."
 
     name = part.get('name', 'Item')
-    if stock_pk is None or available <= 0:
+    available = sum(q for _, q in stock)
+    if available <= 0:
         return False, f"ERROR: {name} is out of stock."
-
-    # Pin the stock item we just counted, so checkout removes from that same one
-    # rather than a pk cached from an earlier scan.
-    part['_stock_item_pk'] = stock_pk
 
     if cart.quantity_of(part) + 1 > available:
         return False, f"ERROR: Only {int(available)}x {name} in stock."
@@ -1441,8 +1407,7 @@ def main():
     disp = None
     if HAS_LCD:
         try:
-            if hasattr(LCD, 'LCD_2inch4'): disp = LCD.LCD_2inch4()
-            else: disp = LCD.LCD_2in4()
+            disp = LCD.LCD_2inch4()
             disp.Init()
             disp.clear()
         except Exception:
@@ -1451,8 +1416,6 @@ def main():
             disp = None
             traceback.print_exc()
             print("[lcd] init FAILED - continuing without a display")
-    elif not lib_path:
-        print("[lcd] driver library not found - continuing without a display")
 
     if disp:
         threading.Thread(target=undervoltage_watchdog, daemon=True).start()
@@ -1478,18 +1441,16 @@ def main():
                 results = data if isinstance(data, list) else data.get("results", [])
                 for part in results:
                     bc = part.get("barcode") or part.get("IPN")
-                    if bc and not BARCODE_CACHE.get(bc):
+                    # Overwrite on every start: a code moved to another part
+                    # (or a renamed part) otherwise stayed wrong forever.
+                    if bc:
                         entry = {
                             "pk": part.get("pk"),
                             "name": part.get("name"),
-                            "pricing_min": part.get("pricing_min"),
-                            "pricing_max": part.get("pricing_max"),
-                            "sell_price": part.get("sell_price"),
                             "thumbnail": part.get("thumbnail"),
                             "image": part.get("image"),
                             "category_detail": part.get("category_detail"),
                             "category": part.get("category"),
-                            "_stock_item_pk": None,  # fetched lazily on first scan
                         }
                         # Under the lock: flush() may be iterating the dict.
                         # _dirty, or the flush() below writes nothing.
@@ -1515,8 +1476,8 @@ def main():
     last_part = None
 
     render(disp, state, cart)
-    report_kiosk_state(state, cart)
-    start_kiosk_heartbeat(cart)
+    report_kiosk_state(state)
+    start_kiosk_heartbeat()
     
     try:
         while True:
@@ -1526,7 +1487,7 @@ def main():
                     state = AppState.IDLE
                     last_part = None
                     render(disp, state, cart, "Timeout: Cart Cleared")
-                    report_kiosk_state(state, cart)
+                    report_kiosk_state(state)
                     last_interaction = time.time()
 
             if scanner:
@@ -1558,7 +1519,7 @@ def main():
 
             bc_upper = barcode.upper()
             if bc_upper in PAGE_BARCODES:
-                send_tv_page(PAGE_BARCODES[bc_upper])
+                press_tv_key(PAGE_BARCODES[bc_upper])
                 continue
             is_command = bc_upper in COMMAND_BARCODES
 
@@ -1581,7 +1542,7 @@ def main():
                     cart.clear()
                     state = AppState.IDLE
                     last_part = None
-                    report_kiosk_state(state, cart)
+                    report_kiosk_state(state)
                     if not disp: render(disp, state, cart)
                     continue
                 if success:
@@ -1598,7 +1559,7 @@ def main():
             if scanned_part: last_part = scanned_part
             
             render(disp, state, cart, msg, item_name, item_price, last_part)
-            report_kiosk_state(state, cart)
+            report_kiosk_state(state)
 
     except KeyboardInterrupt:
         print("\nExiting...")
