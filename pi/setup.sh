@@ -22,6 +22,8 @@ sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
 printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin pi --noclear %%I $TERM\n' \
     | sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf > /dev/null
 grep -q 'exec labwc' ~/.profile || echo '[ "$(tty)" = /dev/tty1 ] && exec labwc' >> ~/.profile
+# Pi OS creates ~/.config/labwc as a folder (keyboard only, now in pi/labwc/environment).
+[ -L ~/.config/labwc ] || rm -rf ~/.config/labwc
 mkdir -p ~/.config && ln -sfn "$DIR/pi/labwc" ~/.config/labwc
 
 echo "--- Timers: TV on/off, watchdog, nightly update"
