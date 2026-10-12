@@ -19,7 +19,7 @@ Everything to rebuild the Pi is in this repo. The only things that are not, the
    add your own key to it). Wi-Fi then goes in `network-config` next to it
    (cloud-init, `wifis: wlan0: access-points: "<ssid>": password: ...`).
 2. Boot it with the Touch Display on DSI and the TV on HDMI, then over SSH:
-   `git clone https://github.com/maakleerplek/Interface-stock ~/Interface-stock && ~/Interface-stock/pi/setup.sh`
+   `sudo apt-get install -y git && git clone https://github.com/maakleerplek/Interface-stock ~/Interface-stock && ~/Interface-stock/pi/setup.sh`
 3. Put back the settings from the newest backup: unpack the tar.gz and copy
    `home/pi/Interface-stock/.env` and `barcode_cache.json` to `~/Interface-stock/`.
 4. `sudo reboot`. The kiosk starts on the touch screen, the TV page on the TV.

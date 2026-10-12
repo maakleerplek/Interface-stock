@@ -2,7 +2,7 @@
 # Turns a fresh Raspberry Pi OS Lite (Trixie, 32-bit) card into the Interface-stock
 # kiosk: touch kiosk on the Touch Display, TV page in Chromium on the TV.
 # Flash with pi/user-data on the boot partition (see README, Recovery), then on the Pi:
-#   git clone https://github.com/maakleerplek/Interface-stock ~/Interface-stock && ~/Interface-stock/pi/setup.sh
+#   sudo apt-get install -y git && git clone https://github.com/maakleerplek/Interface-stock ~/Interface-stock && ~/Interface-stock/pi/setup.sh
 # and put back .env and barcode_cache.json from the backup. Safe to run again.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
