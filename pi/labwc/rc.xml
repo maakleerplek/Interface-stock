@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- labwc for the kiosk: touch goes to the Touch Display, each app to its own screen. -->
+<labwc_config>
+  <touch mapToOutput="DSI-1" mouseEmulation="no" />
+  <windowRules>
+    <windowRule identifier="interface-stock" serverDecoration="no">
+      <action name="MoveToOutput" output="DSI-1" />
+      <action name="ToggleFullscreen" />
+    </windowRule>
+    <windowRule identifier="chromium*" serverDecoration="no">
+      <action name="MoveToOutput" output="HDMI-A-1" />
+    </windowRule>
+  </windowRules>
+</labwc_config>

@@ -1,0 +1,17 @@
+# Cross-builds the kiosk for the Pi (Pi OS Trixie, 32-bit armhf). Same Debian
+# release as the Pi, so the binary links against the same glibc and libs.
+#   docker build -f Dockerfile.armhf -t kiosk-armhf . && docker run --rm -v "$PWD":/src kiosk-armhf
+#   -> target/armv7-unknown-linux-gnueabihf/release/interface-stock-kiosk
+FROM debian:trixie
+RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl build-essential pkg-config gcc-arm-linux-gnueabihf libc6-dev-armhf-cross \
+      libudev-dev:armhf libfontconfig-dev:armhf libxkbcommon-dev:armhf libwayland-dev:armhf \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target armv7-unknown-linux-gnueabihf
+ENV PATH=/root/.cargo/bin:$PATH \
+    CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+    CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc \
+    PKG_CONFIG_ALLOW_CROSS=1 \
+    PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+WORKDIR /src
+CMD ["cargo", "build", "--release", "--locked", "--target", "armv7-unknown-linux-gnueabihf"]

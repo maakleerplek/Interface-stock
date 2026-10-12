@@ -1,0 +1,21 @@
+#cloud-config
+# Interface-stock kiosk Pi (Pi 3A+, Touch Display 2 on DSI, TV on HDMI).
+# Put this on the boot partition of a fresh Raspberry Pi OS Lite (32-bit) card,
+# replacing the user-data there. The key is the admin laptop; add your own.
+hostname: interface-stock
+manage_etc_hosts: true
+timezone: Europe/Brussels
+keyboard:
+  model: pc105
+  layout: be
+users:
+  - name: pi
+    groups: [adm, dialout, audio, video, plugdev, input, render, sudo, netdev, gpio, i2c, spi]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFgj3L2iCVG93tatpQ4qZoQ5SFQh8z76OZ9NQro30JKb eggmansmile@rubenscachyos
+ssh_pwauth: false
+runcmd:
+  - [systemctl, enable, --now, ssh]

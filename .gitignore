@@ -5,3 +5,6 @@ __pycache__/
 .env
 random_fact.json
 barcode_cache.json
+kiosk/interface-stock
+kiosk/interface-stock.new
+image_cache/

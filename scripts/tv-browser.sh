@@ -1,4 +1,6 @@
 #!/bin/bash
+# The TV page in Chromium on the TV (HDMI-A-1), from pi/labwc/autostart.
+# URL: TV_PRESENTATION_URL in ~/Interface-stock/.env.
 
 flags=(
    # Raspberry Pi's chromium wrapper (since 153, Sept 2026) asks "not recommended
@@ -12,7 +14,11 @@ flags=(
    --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT'
    --disable-component-update
    --overscroll-history-navigation=0
-   --disable-features=TranslateUI
+   # LocalNetworkAccessChecks: the TV page (served from the server) talks to
+   # the touch kiosk on ws://localhost:8765; newer Chromium would otherwise
+   # show a permission prompt that nobody can answer in kiosk mode.
+   --disable-features=TranslateUI,LocalNetworkAccessChecks,MediaRouter,OptimizationHints
+   --disable-extensions
    --disable-infobars
    --force-device-scale-factor=1
    --autoplay-policy=no-user-gesture-required
@@ -24,13 +30,7 @@ flags=(
    --disable-sync
    --metrics-recording-only
    --no-first-run
-   # Without this the GPU process asks X for the screen list on every frame,
-   # and X re-reads the TV's EDID each time (~25x a second): an Xorg.0.log
-   # of GBs and a busy CPU. See scripts/kiosk-watchdog.sh.
-   --disable-gpu-vsync
 )
 
-# Reload 20s after launch to clear any initial white screen
-(sleep 20 && DISPLAY=:0 xdotool key F5) &
-
-chromium-browser "${flags[@]}" --app="$(/opt/custompios/scripts/get_url)"
+URL=$(sed -n 's/^TV_PRESENTATION_URL=//p' "$(dirname "$0")/../.env" | tr -d '"')
+exec chromium --ozone-platform=wayland "${flags[@]}" --app="${URL:-http://10.72.1.246:8083}"

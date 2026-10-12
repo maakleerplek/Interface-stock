@@ -1,0 +1,4 @@
+XKB_DEFAULT_MODEL=pc105
+XKB_DEFAULT_LAYOUT=be
+# No mouse on the kiosk: every cursor is transparent (pi/cursor-blank, linked by pi/setup.sh).
+XCURSOR_THEME=blank
