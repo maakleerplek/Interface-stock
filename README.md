@@ -16,7 +16,8 @@ Everything to rebuild the Pi is in this repo. The only things that are not, the
 1. Flash *Raspberry Pi OS Lite (32-bit)* with Raspberry Pi Imager. In its settings
    only set the Wi-Fi (the HTL network), or put `pi/user-data` on the boot
    partition afterwards (hostname `interface-stock`, user `pi`, SSH with key only;
-   add your own key to it).
+   add your own key to it). Wi-Fi then goes in `network-config` next to it
+   (cloud-init, `wifis: wlan0: access-points: "<ssid>": password: ...`).
 2. Boot it with the Touch Display on DSI and the TV on HDMI, then over SSH:
    `git clone https://github.com/maakleerplek/Interface-stock ~/Interface-stock && ~/Interface-stock/pi/setup.sh`
 3. Put back the settings from the newest backup: unpack the tar.gz and copy
