@@ -3,6 +3,9 @@
 # URL: TV_PRESENTATION_URL in ~/Interface-stock/.env.
 
 flags=(
+   # Raspberry Pi's chromium wrapper (since 153, Sept 2026) asks "not recommended
+   # with less than 1GB of RAM" on this 512 MB Pi and waits for a click.
+   --no-memcheck
    --kiosk
    --touch-events=enabled
    --disable-pinch
