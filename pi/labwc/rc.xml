@@ -7,10 +7,8 @@
       <action name="MoveToOutput" output="DSI-1" />
       <action name="ToggleFullscreen" />
     </windowRule>
-    <!-- No mouse on the kiosk: hide the pointer once the TV page opens (back only if a mouse moves). -->
     <windowRule identifier="chromium*" serverDecoration="no">
       <action name="MoveToOutput" output="HDMI-A-1" />
-      <action name="HideCursor" />
     </windowRule>
   </windowRules>
 </labwc_config>

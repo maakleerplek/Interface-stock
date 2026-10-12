@@ -24,7 +24,7 @@ printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin pi --noclear 
 grep -q 'exec labwc' ~/.profile || echo '[ "$(tty)" = /dev/tty1 ] && exec labwc' >> ~/.profile
 # Pi OS creates ~/.config/labwc as a folder (keyboard only, now in pi/labwc/environment).
 [ -L ~/.config/labwc ] || rm -rf ~/.config/labwc
-mkdir -p ~/.config && ln -sfn "$DIR/pi/labwc" ~/.config/labwc
+mkdir -p ~/.config ~/.icons && ln -sfn "$DIR/pi/labwc" ~/.config/labwc && ln -sfn "$DIR/pi/cursor-blank" ~/.icons/blank
 
 echo "--- Leaner Pi: no Bluetooth, no cloud-init after the first boot, no apt timers (update.sh upgrades monthly)"
 sudo systemctl disable --now bluetooth.service apt-daily.timer apt-daily-upgrade.timer man-db.timer 2>/dev/null || true
