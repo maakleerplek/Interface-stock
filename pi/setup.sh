@@ -29,6 +29,8 @@ mkdir -p ~/.config ~/.icons && ln -sfn "$DIR/pi/labwc" ~/.config/labwc && ln -sf
 echo "--- Leaner Pi: no Bluetooth, no cloud-init after the first boot, no apt timers (update.sh upgrades monthly)"
 sudo systemctl disable --now bluetooth.service apt-daily.timer apt-daily-upgrade.timer man-db.timer 2>/dev/null || true
 sudo touch /etc/cloud/cloud-init.disabled
+sudo install -D -m 644 "$DIR/pi/swap.conf" /etc/rpi/swap.conf.d/50-kiosk.conf
+sudo install -m 644 "$DIR/pi/sysctl.conf" /etc/sysctl.d/90-kiosk.conf
 
 echo "--- Timers: TV on/off, watchdog, nightly update"
 for unit in tv-on tv-off; do
