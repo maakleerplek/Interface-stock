@@ -17,7 +17,8 @@ flags=(
    # LocalNetworkAccessChecks: the TV page (served from the server) talks to
    # the touch kiosk on ws://localhost:8765; newer Chromium would otherwise
    # show a permission prompt that nobody can answer in kiosk mode.
-   --disable-features=TranslateUI,LocalNetworkAccessChecks
+   --disable-features=TranslateUI,LocalNetworkAccessChecks,MediaRouter,OptimizationHints
+   --disable-extensions
    --disable-infobars
    --force-device-scale-factor=1
    --autoplay-policy=no-user-gesture-required

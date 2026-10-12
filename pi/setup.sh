@@ -26,6 +26,10 @@ grep -q 'exec labwc' ~/.profile || echo '[ "$(tty)" = /dev/tty1 ] && exec labwc'
 [ -L ~/.config/labwc ] || rm -rf ~/.config/labwc
 mkdir -p ~/.config && ln -sfn "$DIR/pi/labwc" ~/.config/labwc
 
+echo "--- Leaner Pi: no Bluetooth, no cloud-init after the first boot, no apt timers (update.sh upgrades monthly)"
+sudo systemctl disable --now bluetooth.service apt-daily.timer apt-daily-upgrade.timer man-db.timer 2>/dev/null || true
+sudo touch /etc/cloud/cloud-init.disabled
+
 echo "--- Timers: TV on/off, watchdog, nightly update"
 for unit in tv-on tv-off; do
     sed "s|/home/pi/Interface-stock|$DIR|g" "$DIR/systemd/$unit.service" | sudo tee /etc/systemd/system/$unit.service > /dev/null
