@@ -3,7 +3,7 @@
 //! both inputs behave identically. No I/O here except through `Backend`.
 
 use crate::backend::Backend;
-use crate::cart::{Cart, Part};
+use crate::cart::{Cart, Part, Print};
 use std::time::{Duration, Instant};
 
 /// Inactive carts are dropped after this long.
@@ -38,6 +38,8 @@ pub enum Action {
     Back,
     /// One more unit of cart line `n`.
     Increment(usize),
+    /// A 3D print: filament part pk and grams, from the print screen.
+    Print(i64, u32),
     /// One unit less of cart line `n`.
     Decrement(usize),
     PagePrev,
@@ -191,7 +193,25 @@ impl Machine {
         self.try_add(be, part).map_err(|e| (e, true))
     }
 
+    /// A 3D print goes in the cart at the filament's price per gram.
+    fn add_print(&mut self, be: &dyn Backend, pk: i64, grams: u32) -> Result<(), String> {
+        if self.cart.volunteer {
+            return Err("3D prints are always paid: tap VOLUNTEER off first.".into());
+        }
+        if grams == 0 {
+            return Err("Enter the grams of your print.".into());
+        }
+        let part = be.part(pk).ok_or("Filament not found")?;
+        let per_gram = be.print_price(&part);
+        self.info(format!("3D print added: {grams} g {}", part.name));
+        self.cart.prints.push(Print { part, grams, per_gram });
+        Ok(())
+    }
+
     fn toggle_volunteer(&mut self) {
+        if !self.cart.prints.is_empty() {
+            return self.error("3D prints are always paid, also for volunteers.");
+        }
         self.cart.volunteer = !self.cart.volunteer;
         if self.cart.volunteer {
             self.info("Volunteer drink: cart is FREE");
@@ -218,6 +238,10 @@ impl Machine {
 
         use Action::*;
         match (self.state, event) {
+            (State::Idle | State::Shopping, Event::Button(Print(pk, grams))) => match self.add_print(be, pk, grams) {
+                Ok(()) => self.go(State::Shopping, now),
+                Err(e) => self.error(e),
+            },
             (State::Idle, Event::Button(Volunteer)) => {
                 self.info("Add a drink first, then tap VOLUNTEER.")
             }
@@ -285,7 +309,11 @@ impl Machine {
             (State::CheckoutConfirm, Event::Button(Cancel)) => self.go(State::CancelConfirm, now),
             (State::CheckoutConfirm, Event::Button(Volunteer)) => {
                 // Stay: the confirm screen redraws with the new header and total.
-                self.cart.volunteer = !self.cart.volunteer;
+                if self.cart.prints.is_empty() {
+                    self.cart.volunteer = !self.cart.volunteer;
+                } else {
+                    self.error("3D prints are always paid, also for volunteers.");
+                }
             }
             (State::CheckoutConfirm, Event::Button(_)) => {
                 self.go(State::Shopping, now);
@@ -366,6 +394,27 @@ mod tests {
         run(&mut m, &be, &["CONFIRM"]);
         assert_eq!(m.state, State::Idle);
         assert!(m.cart.is_empty());
+    }
+
+    #[test]
+    fn a_3d_print_is_paid_and_never_free() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        let print = |m: &mut Machine, grams| m.handle(&be, Event::Button(Action::Print(9, grams)), Instant::now());
+        print(&mut m, 0);
+        assert_eq!(m.state, State::Idle);                           // no grams: nothing added
+        print(&mut m, 50);
+        assert_eq!((m.state, m.cart.prints.len()), (State::Shopping, 1));
+        assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // 50 g × €0.10
+        run(&mut m, &be, &["VOLUNTEER"]);
+        assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
+        run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
+        assert_eq!(m.state, State::QrDisplay);
+    }
+
+    #[test]
+    fn print_action_from_the_touch_screen() {
+        assert_eq!(crate::action_from("print:9", 42), Some(Action::Print(9, 42)));
+        assert_eq!(crate::action_from("print:x", 42), None);
     }
 
     #[test]

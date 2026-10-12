@@ -31,9 +31,14 @@ pub trait Backend: Send {
     /// Selling price; 0.0 when InvenTree has no sale price for the part.
     fn price(&self, part: &Part) -> f64;
     fn category(&self, part: &Part) -> String;
+    /// 3D-print price per gram of a filament.
+    fn print_price(&self, part: &Part) -> f64;
     /// Remove the cart from stock. Err holds the message for the screen.
     fn checkout(&self, cart: &Cart) -> Result<(), String>;
 }
+
+/// 3D-print price per gram when a filament has none set in InvenTree.
+pub const DEFAULT_PRINT_PRICE: f64 = 0.10;
 
 /// (barcode, pk, name, price, category, stock)
 type DemoRow = (&'static str, i64, &'static str, f64, &'static str, f64);
@@ -162,6 +167,10 @@ impl Backend for Demo {
 
     fn category(&self, part: &Part) -> String {
         self.item(part.pk).map_or("uncategorized".into(), |i| i.category.clone())
+    }
+
+    fn print_price(&self, _part: &Part) -> f64 {
+        DEFAULT_PRINT_PRICE
     }
 
     fn checkout(&self, cart: &Cart) -> Result<(), String> {

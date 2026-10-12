@@ -248,6 +248,13 @@ export component AppWindow inherits Window {
     in-out property <string> category: "ALL";
     in property <[ProductTile]> all-products;
     in property <[ProductTile]> products;
+    // 3D print: filaments (price per gram), and the screen's own state.
+    in property <[ProductTile]> filaments;
+    in-out property <bool> print-open: false;
+    in-out property <int> print-pk: -1;
+    in-out property <string> print-name;
+    in-out property <string> print-per-gram;
+    in-out property <int> print-grams: 0;
 
     callback action(string, int);
     callback pick(int);
@@ -362,6 +369,29 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle { background: Mk.beton; vertical-stretch: 0.01; }
+                if root.filaments.length > 0: Rectangle {
+                    accessible-role: button;
+                    accessible-label: "3D print";
+                    min-height: 72px;
+                    max-height: 132px;
+                    vertical-stretch: 1;
+                    background: print-touch.pressed ? Mk.workshop-diep.darker(15%) : Mk.workshop-diep;
+                    Text {
+                        x: 30px;
+                        y: parent.height - self.height - 16px;
+                        text: "3D PRINT";
+                        color: Mk.wit;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+                    print-touch := TouchArea {
+                        clicked => {
+                            root.print-pk = -1;
+                            root.print-grams = 0;
+                            root.print-open = true;
+                        }
+                    }
+                }
             }
             grid := Rectangle {
                 horizontal-stretch: 1;
@@ -498,6 +528,105 @@ export component AppWindow inherits Window {
         }
 
         // --- cancel ----------------------------------------------------------
+        // --- 3D print: pick the filament, type the grams, add to the cart --
+        if root.screen == Screen.shop && root.print-open: Rectangle {
+            background: Mk.beton;
+            TouchArea { }   // nothing behind it reacts while it is open
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 16px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    Text { text: "1. WHICH FILAMENT?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
+                    Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            for f in root.filaments: Press {
+                                text: f.name + "   " + f.price;
+                                min-height: 64px;
+                                radius: 0px;
+                                font-size: 20px;
+                                fill: f.pk == root.print-pk ? Mk.workshop : Mk.wit;
+                                ink: f.pk == root.print-pk ? Mk.wit : Mk.inkt;
+                                outline: Mk.lijn;
+                                clicked => {
+                                    root.print-pk = f.pk;
+                                    root.print-name = f.name;
+                                    root.print-per-gram = f.price;
+                                }
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    width: 380px;
+                    spacing: 8px;
+                    Text { text: "2. HOW MANY GRAMS?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
+                    Text { text: "The weight Bambu Studio / PrusaSlicer shows for your print."; color: Mk.grafiet; font-size: 14px; wrap: word-wrap; }
+                    Rectangle {
+                        height: 72px;
+                        background: Mk.wit;
+                        Text {
+                            text: root.print-grams + " g";
+                            color: Mk.inkt;
+                            font-size: 40px;
+                            font-weight: 800;
+                        }
+                    }
+                    GridLayout {
+                        spacing: 8px;
+                        Row {
+                            Press { text: "7"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 7, 9999); } }
+                            Press { text: "8"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 8, 9999); } }
+                            Press { text: "9"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 9, 9999); } }
+                        }
+                        Row {
+                            Press { text: "4"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 4, 9999); } }
+                            Press { text: "5"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 5, 9999); } }
+                            Press { text: "6"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 6, 9999); } }
+                        }
+                        Row {
+                            Press { text: "1"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 1, 9999); } }
+                            Press { text: "2"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 2, 9999); } }
+                            Press { text: "3"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 3, 9999); } }
+                        }
+                        Row {
+                            Press { text: "C"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Clear"; clicked => { root.print-grams = 0; } }
+                            Press { text: "0"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10, 9999); } }
+                            Press { text: "⌫"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Delete digit"; clicked => { root.print-grams = floor(root.print-grams / 10); } }
+                        }
+                    }
+                    Text {
+                        text: root.print-pk < 0 ? "Pick a filament first." : root.print-name + " · " + root.print-per-gram;
+                        color: Mk.grafiet;
+                        font-size: 15px;
+                        wrap: word-wrap;
+                    }
+                    Press {
+                        text: "ADD TO CART";
+                        radius: 0px;
+                        enabled: root.print-pk >= 0 && root.print-grams > 0;
+                        fill: Mk.workshop;
+                        clicked => {
+                            root.action("print:" + root.print-pk, root.print-grams);
+                            root.print-open = false;
+                        }
+                    }
+                    Press {
+                        text: "CANCEL";
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.lijn;
+                        clicked => { root.print-open = false; }
+                    }
+                }
+            }
+        }
+
         if root.screen == Screen.cancel-confirm: Entry {
             kicker: "CANCEL";
             title: "Empty the cart?";

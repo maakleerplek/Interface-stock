@@ -271,6 +271,7 @@ export component AppWindow inherits Window {
     in-out property <string> category: "ALL";
     in property <[ProductTile]> all-products;
     in property <[ProductTile]> products;
+    in property <[ProductTile]> filaments;   // the 3D-print screen, only in app.slint
 
     callback action(string, int);
     callback pick(int);

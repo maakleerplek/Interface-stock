@@ -2,8 +2,8 @@
 //! `barcode_inventree.py` (lookups, stock levels, sale prices, stock
 //! removal, barcode cache) plus a cached product catalog for the grid.
 
-use crate::backend::{Backend, CatalogItem, StockLookupError};
-use crate::cart::{Cart, Part};
+use crate::backend::{Backend, CatalogItem, StockLookupError, DEFAULT_PRINT_PRICE};
+use crate::cart::{Cart, Part, Print};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,8 @@ pub struct InvenTreeConfig {
     pub tv_url: Option<String>,
     /// Categories that are never shown in the grid.
     pub hidden_categories: Vec<String>,
+    /// 3D-print price per gram for a filament without its own (PRINT_PRICE_PER_GRAM).
+    pub print_price: f64,
 }
 
 impl InvenTreeConfig {
@@ -47,6 +49,7 @@ impl InvenTreeConfig {
             htl_name: htl_name.into(),
             tv_url: var("TV_PRESENTATION_URL").map(|u| u.trim_end_matches('/').to_string()),
             hidden_categories,
+            print_price: var("PRINT_PRICE_PER_GRAM").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PRINT_PRICE),
         }
     }
 }
@@ -112,6 +115,8 @@ struct Catalog {
     /// IPN / barcode (lowercase) -> part pk.
     by_code: HashMap<String, i64>,
     prices: HashMap<i64, f64>,
+    /// 3D-print price per gram per filament (parameter "3D-print prijs per gram").
+    print_prices: HashMap<i64, f64>,
     loaded: bool,
 }
 
@@ -155,6 +160,22 @@ pub fn removal_payload(lines: &[(i64, f64)], volunteer: bool, htl_name: &str) ->
     json!({
         "items": lines.iter().map(|(pk, q)| json!({"pk": pk, "quantity": q})).collect::<Vec<_>>(),
         "notes": notes,
+    })
+}
+
+/// The InvenTree customer the till sells to (same as the stock app).
+const TILL_CUSTOMER: &str = "Walk-in customer";
+const PRINT_PRICE_TEMPLATE: &str = "3D-print prijs per gram";
+
+/// One 3D print as a sales-order extra line.
+pub fn print_line(order: i64, p: &Print) -> Value {
+    json!({
+        "order": order,
+        "reference": "3D printing",
+        "description": p.part.name,
+        "quantity": p.grams,
+        "price": format!("{:.4}", p.per_gram),
+        "price_currency": "EUR",
     })
 }
 
@@ -277,7 +298,11 @@ impl Shared {
         }
         let prices: HashMap<i64, f64> = best.into_iter().map(|(k, (_, p))| (k, p)).collect();
 
-        let mut cat = Catalog { prices, loaded: true, ..Default::default() };
+        let print_prices = self.print_prices().unwrap_or_else(|e| {
+            eprintln!("[inventree] 3D-print prices: {e}");
+            HashMap::new()
+        });
+        let mut cat = Catalog { prices, print_prices, loaded: true, ..Default::default() };
         for v in self.get_all("/api/part/?active=true&limit=500")? {
             let Some(part) = self.part_from(&v) else { continue };
             let category = v
@@ -312,6 +337,62 @@ impl Shared {
         eprintln!("[inventree] {} parts, {} for sale", cat.parts.len(), cat.items.len());
         *self.catalog.write().unwrap() = cat;
         Ok(())
+    }
+
+    /// Price per gram per filament part, from the InvenTree parameter "3D-print prijs per gram".
+    fn print_prices(&self) -> Result<HashMap<i64, f64>, String> {
+        let templates = results(self.get("/api/parameter/template/?search=3D-print%20prijs")?);
+        let Some(template) = templates
+            .iter()
+            .find(|t| t.get("name").and_then(Value::as_str) == Some(PRINT_PRICE_TEMPLATE))
+            .and_then(|t| t.get("pk")?.as_i64())
+        else {
+            return Ok(HashMap::new());
+        };
+        Ok(self
+            .get_all(&format!("/api/parameter/?model_type=part.part&template={template}&limit=500"))?
+            .into_iter()
+            .filter_map(|r| {
+                let price: f64 = r.get("data")?.as_str()?.replace(',', ".").trim().parse().ok()?;
+                (price > 0.0).then_some((r.get("model_id")?.as_i64()?, price))
+            })
+            .collect())
+    }
+
+    /// Book 3D prints as one sales order of extra lines: reference "3D printing",
+    /// the filament as description, grams × price per gram. The stock app
+    /// books them the same way, so the analytics see both.
+    fn sell_prints(&self, prints: &[Print]) -> Result<(), String> {
+        const T: Duration = Duration::from_secs(10);
+        let ok = |r: Result<(u16, Value), String>| match r {
+            Ok((200 | 201, v)) => Ok(v),
+            Ok((code, v)) => Err(format!("API error {code}: {v}")),
+            Err(e) => Err(e),
+        };
+        let customer = results(self.get(&format!("/api/company/?is_customer=true&search={}", TILL_CUSTOMER.replace(' ', "%20")))?)
+            .into_iter()
+            .find(|c| c.get("name").and_then(Value::as_str) == Some(TILL_CUSTOMER))
+            .and_then(|c| c.get("pk")?.as_i64())
+            .ok_or("No till customer in InvenTree")?;
+        let order = ok(self.post("/api/order/so/", &json!({"customer": customer, "description": "3D printing via Interface-stock"}), T))?;
+        let pk = order.get("pk").and_then(Value::as_i64).ok_or("No sales order created")?;
+        let book = || -> Result<(), String> {
+            for p in prints {
+                ok(self.post("/api/order/so-extra-line/", &print_line(pk, p), T))?;
+            }
+            ok(self.post(&format!("/api/order/so/{pk}/issue/"), &json!({}), T))?;
+            // Without SALESORDER_SHIP_COMPLETE the first call only reaches "shipped".
+            for _ in 0..2 {
+                ok(self.post(&format!("/api/order/so/{pk}/complete/"), &json!({"accept_incomplete": true}), T))?;
+                if self.get(&format!("/api/order/so/{pk}/"))?.get("status").and_then(Value::as_i64) == Some(30) {
+                    break;
+                }
+            }
+            Ok(())
+        };
+        book().inspect_err(|_| {
+            let _ = self.post(&format!("/api/order/so/{pk}/cancel/"), &json!({}), T);
+        })
     }
 
     /// (stock item pk, quantity) of every in-stock item of a part.
@@ -565,6 +646,10 @@ impl Backend for InvenTree {
         }
     }
 
+    fn print_price(&self, part: &Part) -> f64 {
+        self.sh.catalog.read().unwrap().print_prices.get(&part.pk).copied().unwrap_or(self.sh.cfg.print_price)
+    }
+
     fn checkout(&self, cart: &Cart) -> Result<(), String> {
         let sh = &self.sh;
         if sh.cfg.token.is_empty() {
@@ -591,14 +676,24 @@ impl Backend for InvenTree {
             let spread = spread(stock, *qty).ok_or_else(|| format!("Only {}x {} left", available as u32, part.name))?;
             lines.extend(spread);
         }
-        if lines.is_empty() {
+        if lines.is_empty() && !cart.items.is_empty() {
             return Err("No stock items found to remove".into());
         }
-        let payload = removal_payload(&lines, cart.volunteer, &sh.cfg.htl_name);
-        match sh.post("/api/stock/remove/", &payload, Duration::from_secs(10)) {
-            Ok((200 | 201, _)) => {}
-            Ok((code, _)) => return Err(format!("API error {code}")),
-            Err(e) => return Err(e),
+        // Prints first: the stock is verified above, so the removal below rarely
+        // fails, and a failed print booking leaves the stock untouched.
+        if !cart.prints.is_empty() {
+            sh.sell_prints(&cart.prints)?;
+        }
+        if !lines.is_empty() {
+            let payload = removal_payload(&lines, cart.volunteer, &sh.cfg.htl_name);
+            match sh.post("/api/stock/remove/", &payload, Duration::from_secs(10)) {
+                Ok((200 | 201, _)) => {}
+                Ok((code, _)) => return Err(format!("API error {code}")),
+                Err(e) => return Err(e),
+            }
+        }
+        for p in &cart.prints {
+            sh.changelog("checkout", &format!("3D print · {}", p.part.name), 1, Some(p.price()));
         }
         for (part, qty) in &cart.items {
             if cart.volunteer {

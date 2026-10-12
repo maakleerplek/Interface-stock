@@ -120,6 +120,8 @@ pub struct View {
     pub qr: Option<SharedPixelBuffer<Rgb8Pixel>>,
     pub categories: Vec<CategoryData>,
     pub catalog: Vec<TileData>,
+    /// Filaments for the 3D-print screen, price per gram.
+    pub filaments: Vec<TileData>,
     pub cart_categories: String,
     pub done_summary: String,
 }
@@ -129,6 +131,9 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
     // + 0.0: an empty f64 sum is -0.0, which prints as "€-0.00".
     let total = m.cart.total(price) + 0.0;
     let mut cats: Vec<String> = m.cart.items.iter().map(|(p, _)| be.category(p)).collect();
+    if !m.cart.prints.is_empty() {
+        cats.push("3d print".into());
+    }
     cats.sort();
     cats.dedup();
     let qr = (m.state == State::QrDisplay)
@@ -147,6 +152,25 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
     let mut categories: Vec<String> = catalog.iter().map(|c| c.category.to_uppercase()).collect();
     categories.sort();
     categories.dedup();
+    let filaments = catalog
+        .iter()
+        .filter(|c| c.category.eq_ignore_ascii_case("filament"))
+        .map(|c| {
+            let (light, deep) = category_colors(&c.category);
+            TileData {
+                pk: c.part.pk as i32,
+                name: c.part.name.clone(),
+                price: format!("€{:.2}/g", be.print_price(&c.part)),
+                initials: initials(&c.part.name),
+                light,
+                deep,
+                sold_out: false,
+                category: c.category.to_uppercase(),
+                in_cart: 0,
+                image: c.image.clone(),
+            }
+        })
+        .collect();
     let tiles = catalog
         .iter()
         .map(|c| {
@@ -188,6 +212,12 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 price: format_price(price(p) * *q as f64),
                 deep: category_colors(&be.category(p)).1,
             })
+            .chain(m.cart.prints.iter().map(|p| RowData {
+                name: format!("3D print · {} · {} g", p.part.name, p.grams),
+                qty: 1,
+                price: format_price(p.price()),
+                deep: category_colors("filament").1,
+            }))
             .collect(),
         units: m.cart.units() as i32,
         total: format!("€{total:.2}"),
@@ -201,6 +231,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             })
             .collect(),
         catalog: tiles,
+        filaments,
         cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
             "{done_units} drink{} · {}",
@@ -228,6 +259,10 @@ pub fn thumbnail(path: &Path) -> Option<slint::Image> {
 }
 
 pub fn action_from(name: &str, n: i32) -> Option<Action> {
+    // "print:<filament pk>" with the grams as n, from the 3D-print screen.
+    if let Some(pk) = name.strip_prefix("print:") {
+        return Some(Action::Print(pk.parse().ok()?, n.max(0) as u32));
+    }
     let n = n.max(0) as usize;
     Some(match name {
         "confirm" => Action::Confirm,
@@ -306,6 +341,24 @@ macro_rules! define_ui_glue {
                 })
                 .collect();
             ui.set_all_products(ModelRc::new(VecModel::from(tiles)));
+            let filaments: Vec<ProductTile> = v
+                .filaments
+                .into_iter()
+                .map(|t| ProductTile {
+                    pk: t.pk,
+                    name: t.name.into(),
+                    price: t.price.into(),
+                    initials: t.initials.into(),
+                    light: t.light,
+                    deep: t.deep,
+                    sold_out: false,
+                    category: t.category.into(),
+                    in_cart: 0,
+                    has_image: false,
+                    image: Default::default(),
+                })
+                .collect();
+            ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
             ui.set_cart_categories(v.cart_categories.into());
             ui.set_done_summary(v.done_summary.into());
             refilter(ui);
