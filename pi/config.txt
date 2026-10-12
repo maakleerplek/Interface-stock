@@ -1,5 +1,6 @@
 # Appended to /boot/firmware/config.txt by pi/setup.sh.
-# Interface-stock: Raspberry Pi Touch Display 2 (7") on DSI, the TV on HDMI.
-dtoverlay=vc4-kms-dsi-ili9881-7inch
+# The Touch Display 2 (DSI) is found by display_auto_detect=1 (Pi OS default).
+# Only if it is not: add dtoverlay=vc4-kms-dsi-ili9881-7inch, but never without
+# the display connected, or the TV (HDMI) gets no picture either.
 gpu_mem=64
 disable_splash=1

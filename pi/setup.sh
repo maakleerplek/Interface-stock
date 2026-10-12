@@ -11,8 +11,8 @@ echo "--- Packages"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends labwc wlr-randr chromium grim imagemagick cec-utils curl git fonts-dejavu-core
 
-echo "--- Boot config: Touch Display overlay"
-grep -q ili9881 /boot/firmware/config.txt || sudo tee -a /boot/firmware/config.txt < "$DIR/pi/config.txt" > /dev/null
+echo "--- Boot config"
+grep -q "Appended to /boot/firmware/config.txt by pi/setup.sh" /boot/firmware/config.txt || sudo tee -a /boot/firmware/config.txt < "$DIR/pi/config.txt" > /dev/null
 
 echo "--- Kiosk program"
 "$DIR/pi/fetch-kiosk.sh"
