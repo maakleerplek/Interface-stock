@@ -1,0 +1,28 @@
+# Builds the touch kiosk for the Pi (Pi OS Trixie, 32-bit) and publishes it as
+# release "kiosk-latest". The Pi downloads it with pi/fetch-kiosk.sh (nightly).
+name: Kiosk (Pi build)
+on:
+  push:
+    branches: [master]
+    paths: [kiosk/**, .github/workflows/kiosk.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (Docker, armhf)
+        working-directory: kiosk
+        run: |
+          docker build -f Dockerfile.armhf -t kiosk-armhf .
+          docker run --rm -v "$PWD":/src kiosk-armhf
+          cp target/armv7-unknown-linux-gnueabihf/release/interface-stock "$GITHUB_WORKSPACE/interface-stock"
+      - name: Publish as kiosk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view kiosk-latest >/dev/null 2>&1 \
+            || gh release create kiosk-latest --title "Kiosk (latest build)" --notes "Built from master by .github/workflows/kiosk.yml." --prerelease
+          gh release upload kiosk-latest interface-stock --clobber

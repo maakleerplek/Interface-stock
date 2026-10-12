@@ -1,4 +1,6 @@
 #!/bin/bash
+# The TV page in Chromium on the TV (HDMI-A-1), from pi/labwc/autostart.
+# URL: TV_PRESENTATION_URL in ~/Interface-stock/.env.
 
 flags=(
    --kiosk
@@ -24,13 +26,7 @@ flags=(
    --disable-sync
    --metrics-recording-only
    --no-first-run
-   # Without this the GPU process asks X for the screen list on every frame,
-   # and X re-reads the TV's EDID each time (~25x a second): an Xorg.0.log
-   # of GBs and a busy CPU. See scripts/kiosk-watchdog.sh.
-   --disable-gpu-vsync
 )
 
-# Reload 20s after launch to clear any initial white screen
-(sleep 20 && DISPLAY=:0 xdotool key F5) &
-
-chromium-browser "${flags[@]}" --app="$(/opt/custompios/scripts/get_url)"
+URL=$(sed -n 's/^TV_PRESENTATION_URL=//p' "$(dirname "$0")/../.env" | tr -d '"')
+exec chromium --ozone-platform=wayland "${flags[@]}" --app="${URL:-http://10.72.1.246:8083}"

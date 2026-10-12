@@ -4,8 +4,8 @@
 # logged: journalctl -t kiosk-watchdog
 #
 #  1. Disk: X once logged the TV's screen modes every second until the SD card
-#     was full (22 GB Xorg.0.log, 2026-09-28). Empty that log above 100 MB;
-#     above 90 % full also shrink the journal.
+#     was full (22 GB Xorg.0.log, 2026-09-28, FullPageOS). Above 90 % full
+#     shrink the journal.
 #  2. Wi-Fi: after a warm reboot the Wi-Fi chip sometimes fails to load its
 #     firmware ("brcmfmac: Downloaded RAM image is corrupted") and wlan0 never
 #     appears. Reloading the driver loads the firmware again.
@@ -14,8 +14,9 @@
 #     hours (after tv-on.timer fired, before tv-off.timer) it is switched back
 #     on over HDMI-CEC. Turning Auto Power Off off in the TV menu avoids it.
 #  4. TV page: Chromium on the heavy TV page sometimes shows a plain white
-#     screen (out of memory). A screenshot with no variation means the page is
-#     gone: F5 first, then restart Chromium, then reboot (at most every 6 h).
+#     screen (out of memory). A screenshot of the TV with no variation means the
+#     page is gone: restart Chromium (labwc's autostart starts it again), then
+#     reboot (at most every 6 h).
 #
 # WATCHDOG_DRYRUN=1 only reports what it sees and would do.
 
@@ -29,16 +30,10 @@ act() { if [ "$DRY" = 1 ]; then echo "would: $*"; else "$@"; fi; }
 # Seconds since the stamp file was written, or a large number if never.
 age() { [ -f "$1" ] && echo $(( $(date +%s) - $(stat -c %Y "$1") )) || echo 999999; }
 
-export DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority
+# The labwc session of user pi (Wayland), for the screenshot.
+wl() { runuser -u pi -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 "$@"; }
 
 # --- 1. Disk -----------------------------------------------------------------
-for f in /var/log/Xorg.*.log; do
-    [ -f "$f" ] || continue
-    if [ "$(du -m "$f" | cut -f1)" -gt 100 ]; then
-        log "$f over 100 MB: emptying it"
-        act truncate -s 0 "$f"
-    fi
-done
 use=$(df --output=pcent / | tail -1 | tr -dc '0-9')
 if [ "$use" -ge 90 ]; then
     log "disk ${use}% full: shrinking the journal to 200 MB"
@@ -75,7 +70,7 @@ if [ "${on_at:-0}" -gt "${off_at:-0}" ] && [ -e /dev/cec0 ]; then
 fi
 
 # --- 4. TV page --------------------------------------------------------------
-URL=$(/opt/custompios/scripts/get_url 2>/dev/null)
+URL=$(sed -n 's/^TV_PRESENTATION_URL=//p' /home/pi/Interface-stock/.env | tr -d '"')
 if ! curl -sf -o /dev/null --max-time 15 "$URL"; then
     rm -f "$STATE/blank"   # server down: not something a refresh fixes
     exit 0
@@ -83,25 +78,20 @@ fi
 
 # Mean brightness and spread of a tiny grayscale screenshot. The TV page has
 # a spread around 0.18; a white (or black) screen is close to 0.
-read -r mean sd < <(timeout 20 import -silent -window root -resize 64x36! -colorspace gray \
-    -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null)
-[ -n "$sd" ] || exit 0   # X not up yet
+read -r mean sd < <(timeout 20 wl grim -o HDMI-A-1 -t ppm - 2>/dev/null \
+    | convert - -resize 64x36! -colorspace gray -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null)
+[ -n "$sd" ] || exit 0   # labwc not up yet
 
 if awk -v sd="$sd" 'BEGIN { exit !(sd < 0.02) }'; then
     n=$(( $(cat "$STATE/blank" 2>/dev/null || echo 0) + 1 ))
     [ "$DRY" = 1 ] || echo "$n" > "$STATE/blank"
     case $n in
         1)
-            log "TV page blank (mean=$mean sd=$sd): pressing F5"
-            win=$(timeout 10 xdotool search --onlyvisible --class chromium | head -1)
-            [ -n "$win" ] && act timeout 10 xdotool windowactivate --sync "$win" key --window "$win" F5
-            ;;
-        2)
-            # run_onepageos starts Chromium again as soon as it is gone.
-            log "TV page still blank after F5: restarting Chromium"
+            # labwc's autostart starts Chromium again as soon as it is gone.
+            log "TV page blank (mean=$mean sd=$sd): restarting Chromium"
             act pkill -x chromium
             ;;
-        3) ;;   # give the restarted Chromium one more round
+        2) ;;   # give the restarted Chromium one more round
         *)
             # Not only 4: once the 6 h guard skipped a reboot, n kept counting
             # past 4 and a later reboot never came.

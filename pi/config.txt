@@ -1,0 +1,5 @@
+# Appended to /boot/firmware/config.txt by pi/setup.sh.
+# Interface-stock: Raspberry Pi Touch Display 2 (7") on DSI, the TV on HDMI.
+dtoverlay=vc4-kms-dsi-ili9881-7inch
+gpu_mem=64
+disable_splash=1
