@@ -3,7 +3,7 @@
 //! both inputs behave identically. No I/O here except through `Backend`.
 
 use crate::backend::{Backend, LaserSession};
-use crate::cart::{Cart, Part, Print, Tool, ToolTime};
+use crate::cart::{filament_type, Cart, Part, Print, Tool, ToolTime};
 use std::time::{Duration, Instant};
 
 /// Inactive carts are dropped after this long.
@@ -39,8 +39,8 @@ pub enum Action {
     Back,
     /// One more unit of cart line `n`.
     Increment(usize),
-    /// A 3D print: filament part pk and grams, from the print screen.
-    Print(i64, u32),
+    /// A 3D print and its grams, from the print screen.
+    Print(PrintPick, u32),
     /// Machine time: the machine and its minutes, from the minutes screen.
     Time(Tool, u32),
     /// Pay laser timer session `n` of `open_sessions`.
@@ -49,6 +49,17 @@ pub enum Action {
     Decrement(usize),
     PagePrev,
     PageNext,
+}
+
+/// What the visitor picked on the 3D-print screen; the colour and the type are optional.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintPick {
+    /// A filament (type and colour), by part pk.
+    Filament(i64),
+    /// Only the type of this filament part, no colour.
+    TypeOf(i64),
+    /// Only grams.
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,18 +209,34 @@ impl Machine {
         self.try_add(be, part).map_err(|e| (e, true))
     }
 
-    /// A 3D print goes in the cart at the filament's price per gram.
-    fn add_print(&mut self, be: &dyn Backend, pk: i64, grams: u32) -> Result<(), String> {
+    /// A 3D print goes in the cart at the filament's price per gram; only a type is its
+    /// cheapest filament's price, only grams the default price.
+    fn add_print(&mut self, be: &dyn Backend, pick: PrintPick, grams: u32) -> Result<(), String> {
         if self.cart.volunteer {
             return Err("3D prints are always paid: tap VOLUNTEER off first.".into());
         }
         if grams == 0 {
             return Err("Enter the grams of your print.".into());
         }
-        let part = be.part(pk).ok_or("Filament not found")?;
-        let per_gram = be.print_price(&part);
-        self.info(format!("3D print added: {grams} g {}", part.name));
-        self.cart.prints.push(Print { part, grams, per_gram });
+        let (material, per_gram) = match pick {
+            PrintPick::Filament(pk) => {
+                let part = be.part(pk).ok_or("Filament not found")?;
+                (part.name.clone(), be.print_price(&part))
+            }
+            PrintPick::TypeOf(pk) => {
+                let kind = filament_type(&be.part(pk).ok_or("Filament not found")?.name).0;
+                let cheapest = be
+                    .catalog()
+                    .iter()
+                    .filter(|c| c.category.eq_ignore_ascii_case("filament") && filament_type(&c.part.name).0 == kind)
+                    .map(|c| be.print_price(&c.part))
+                    .fold(f64::INFINITY, f64::min);
+                (kind, if cheapest.is_finite() { cheapest } else { be.print_price(&Part::default()) })
+            }
+            PrintPick::Unknown => (String::new(), be.print_price(&Part::default())),
+        };
+        self.info(format!("3D print added: {grams} g {material}"));
+        self.cart.prints.push(Print { material, grams, per_gram });
         Ok(())
     }
 
@@ -444,7 +471,7 @@ mod tests {
     #[test]
     fn a_3d_print_is_paid_and_never_free() {
         let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
-        let print = |m: &mut Machine, grams| m.handle(&be, Event::Button(Action::Print(9, grams)), Instant::now());
+        let print = |m: &mut Machine, grams| m.handle(&be, Event::Button(Action::Print(PrintPick::Filament(9), grams)), Instant::now());
         print(&mut m, 0);
         assert_eq!(m.state, State::Idle);                           // no grams: nothing added
         print(&mut m, 50);
@@ -491,8 +518,20 @@ mod tests {
     }
 
     #[test]
+    fn a_print_without_colour_or_type_is_booked_without_one() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        m.handle(&be, Event::Button(Action::Print(PrintPick::Unknown, 20)), Instant::now());
+        m.handle(&be, Event::Button(Action::Print(PrintPick::TypeOf(9), 20)), Instant::now());
+        let booked: Vec<&str> = m.cart.prints.iter().map(|p| p.material.as_str()).collect();
+        assert_eq!(booked, ["", "PLA"]);
+        assert!((m.cart.total(|p| be.price(p)) - 4.0).abs() < 1e-9);   // 2 × 20 g × €0.10
+    }
+
+    #[test]
     fn print_action_from_the_touch_screen() {
-        assert_eq!(crate::action_from("print:9", 42), Some(Action::Print(9, 42)));
+        assert_eq!(crate::action_from("print:9", 42), Some(Action::Print(PrintPick::Filament(9), 42)));
+        assert_eq!(crate::action_from("print-type:9", 42), Some(Action::Print(PrintPick::TypeOf(9), 42)));
+        assert_eq!(crate::action_from("print:none", 42), Some(Action::Print(PrintPick::Unknown, 42)));
         assert_eq!(crate::action_from("print:x", 42), None);
     }
 

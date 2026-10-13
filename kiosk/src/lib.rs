@@ -124,8 +124,10 @@ pub struct View {
     pub qr: Option<SharedPixelBuffer<Rgb8Pixel>>,
     pub categories: Vec<CategoryData>,
     pub catalog: Vec<TileData>,
-    /// Filaments for the 3D-print screen, price per gram.
+    /// Filaments for the 3D-print screen: name = colour, category = type, price per gram.
     pub filaments: Vec<TileData>,
+    /// Filament types for the 3D-print screen: (a filament's pk, type, "from" price per gram).
+    pub filament_types: Vec<(i32, String, String)>,
     /// Machines for the minutes screen: (id, name, price per minute, minimum per job).
     pub tools: Vec<(String, String, f32, f32)>,
     /// Laser timer sessions to pay: (name, minutes, price).
@@ -166,20 +168,32 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
         .filter(|c| c.category.eq_ignore_ascii_case("filament"))
         .map(|c| {
             let (light, deep) = category_colors(&c.category);
+            // The print screen shows types first, then the colours of the chosen type.
+            let (kind, colour) = cart::filament_type(&c.part.name);
             TileData {
                 pk: c.part.pk as i32,
-                name: c.part.name.clone(),
+                name: colour,
                 price: format!("€{:.2}/g", be.print_price(&c.part)),
                 initials: initials(&c.part.name),
                 light,
                 deep,
                 sold_out: false,
-                category: c.category.to_uppercase(),
+                category: kind,
                 in_cart: 0,
                 image: c.image.clone(),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // One section per type, in name order: a filament of it (for "print-type:<pk>") and its lowest price.
+    let mut filament_types: Vec<(i32, String, f64)> = vec![];
+    for c in catalog.iter().filter(|c| c.category.eq_ignore_ascii_case("filament")) {
+        let (kind, price) = (cart::filament_type(&c.part.name).0, be.print_price(&c.part));
+        match filament_types.iter_mut().find(|t| t.1 == kind) {
+            Some(t) => t.2 = t.2.min(price),
+            None => filament_types.push((c.part.pk as i32, kind, price)),
+        }
+    }
+    filament_types.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
     let tiles = catalog
         .iter()
         .map(|c| {
@@ -223,7 +237,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 whole: false,
             })
             .chain(m.cart.prints.iter().map(|p| RowData {
-                name: format!("3D print · {} · {} g", p.part.name, p.grams),
+                name: if p.material.is_empty() { format!("3D print · {} g", p.grams) } else { format!("3D print · {} · {} g", p.material, p.grams) },
                 qty: 1,
                 price: format_price(p.price()),
                 deep: category_colors("filament").1,
@@ -250,6 +264,10 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             .collect(),
         catalog: tiles,
         filaments,
+        filament_types: filament_types
+            .into_iter()
+            .map(|(pk, kind, price)| (pk, kind, format!("from €{price:.2}/g")))
+            .collect(),
         tools: cart::Tool::ALL
             .into_iter()
             .map(|t| {
@@ -292,8 +310,15 @@ pub fn thumbnail(path: &Path) -> Option<slint::Image> {
 
 pub fn action_from(name: &str, n: i32) -> Option<Action> {
     // "print:<filament pk>" with the grams as n, from the 3D-print screen.
+    let grams = n.max(0) as u32;
+    if let Some(pk) = name.strip_prefix("print-type:") {
+        return Some(Action::Print(state::PrintPick::TypeOf(pk.parse().ok()?), grams));
+    }
+    if name == "print:none" {
+        return Some(Action::Print(state::PrintPick::Unknown, grams));
+    }
     if let Some(pk) = name.strip_prefix("print:") {
-        return Some(Action::Print(pk.parse().ok()?, n.max(0) as u32));
+        return Some(Action::Print(state::PrintPick::Filament(pk.parse().ok()?), grams));
     }
     // "session:<n>", a laser timer session from the minutes screen.
     if let Some(n) = name.strip_prefix("session:") {
@@ -399,6 +424,24 @@ macro_rules! define_ui_glue {
                 })
                 .collect();
             ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
+            let types: Vec<ProductTile> = v
+                .filament_types
+                .into_iter()
+                .map(|(pk, name, price)| ProductTile {
+                    pk,
+                    name: name.clone().into(),
+                    price: price.into(),
+                    initials: Default::default(),
+                    light: Default::default(),
+                    deep: Default::default(),
+                    sold_out: false,
+                    category: name.into(),
+                    in_cart: 0,
+                    has_image: false,
+                    image: Default::default(),
+                })
+                .collect();
+            ui.set_filament_types(ModelRc::new(VecModel::from(types)));
             let tools: Vec<ToolRate> = v
                 .tools
                 .into_iter()

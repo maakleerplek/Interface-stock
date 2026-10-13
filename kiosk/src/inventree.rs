@@ -193,7 +193,7 @@ pub fn print_line(order: i64, p: &Print) -> Value {
     json!({
         "order": order,
         "reference": "3D printing",
-        "description": p.part.name,
+        "description": p.material,
         "quantity": p.grams,
         "price": format!("{:.4}", p.per_gram),
         "price_currency": "EUR",
@@ -804,7 +804,7 @@ impl Backend for InvenTree {
             }
         }
         for p in &cart.prints {
-            sh.changelog("checkout", &format!("3D print · {}", p.part.name), 1, Some(p.price()));
+            sh.changelog("checkout", &format!("3D print · {} g {}", p.grams, p.material), 1, Some(p.price()));
         }
         for t in &cart.times {
             sh.changelog("checkout", &format!("{} · {} min", t.tool.label(), t.minutes), 1, Some(t.price()));

@@ -293,6 +293,23 @@ fn tap_through_every_screen() {
     r.scan("CANCEL");
     assert_eq!(r.units(), 0);
 
+    // 3D print: the type first, then its colour; both optional.
+    r.tap("3D PRINT");
+    r.shot("print-types");
+    r.tap("PLA");
+    r.shot("print-colours");
+    r.tap("2");
+    r.tap("0");
+    r.tap("ADD TO CART");
+    assert_eq!(r.ui.get_rows().row_data(0).unwrap().name.as_str(), "3D print · PLA · 20 g");
+    r.tap("3D PRINT");
+    r.tap("5");
+    r.tap("ADD TO CART");
+    assert_eq!(r.ui.get_rows().row_data(1).unwrap().name.as_str(), "3D print · 5 g");
+    r.scan("CANCEL");
+    r.scan("CANCEL");
+    assert_eq!(r.units(), 0);
+
     // Machine time: 4 minutes of lasercut costs the €5 minimum, never free.
     r.tap("LASERCUT");
     assert!(r.ui.get_time_open());

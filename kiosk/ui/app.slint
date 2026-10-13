@@ -281,9 +281,13 @@ export component AppWindow inherits Window {
     // 3D print: filaments (price per gram), and the screen's own state.
     in property <[ProductTile]> filaments;
     in-out property <bool> print-open: false;
+    in property <[ProductTile]> filament-types;
+    in-out property <string> print-type;
+    in-out property <int> print-type-pk: -1;
+    in-out property <string> print-type-price;
     in-out property <int> print-pk: -1;
     in-out property <string> print-name;
-    in-out property <string> print-per-gram;
+    in-out property <string> print-colour-price;
     in-out property <int> print-grams: 0;
     // Machine time: the machines (price per minute, minimum), and the minutes screen's state.
     in property <[ToolRate]> tools;
@@ -429,6 +433,8 @@ export component AppWindow inherits Window {
                     print-touch := TouchArea {
                         clicked => {
                             root.print-pk = -1;
+                            root.print-type = "";
+                            root.print-type-pk = -1;
                             root.print-grams = 0;
                             root.print-open = true;
                         }
@@ -598,7 +604,7 @@ export component AppWindow inherits Window {
         }
 
         // --- cancel ----------------------------------------------------------
-        // --- 3D print: pick the filament, type the grams, add to the cart --
+        // --- 3D print: the type, then its colour (both optional), the grams --
         if root.screen == Screen.shop && root.print-open: Rectangle {
             background: Mk.beton;
             TouchArea { }   // nothing behind it reacts while it is open
@@ -607,25 +613,62 @@ export component AppWindow inherits Window {
                 spacing: 16px;
                 VerticalLayout {
                     horizontal-stretch: 1;
-                    spacing: 8px;
-                    Text { text: "1. WHICH FILAMENT?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
+                    spacing: 10px;
+                    Text { text: "1. WHICH FILAMENT? (OPTIONAL)"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 80px;
+                        for t in root.filament-types: Press {
+                            text: t.name;
+                            radius: 0px;
+                            font-size: 22px;
+                            fill: t.name == root.print-type ? Mk.workshop-diep : Mk.wit;
+                            ink: t.name == root.print-type ? Mk.wit : Mk.inkt;
+                            outline: Mk.lijn;
+                            clicked => {
+                                if (root.print-type == t.name) {
+                                    root.print-type = "";
+                                    root.print-type-pk = -1;
+                                } else {
+                                    root.print-type = t.name;
+                                    root.print-type-pk = t.pk;
+                                    root.print-type-price = t.price;
+                                }
+                                root.print-pk = -1;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.print-type == "" ? "Pick a type to choose its colour, or just type the grams." : "2. WHICH COLOUR? (OPTIONAL)";
+                        color: root.print-type == "" ? Mk.grafiet : Mk.inkt;
+                        font-size: root.print-type == "" ? 16px : 20px;
+                        font-weight: root.print-type == "" ? 400 : 800;
+                    }
                     Flickable {
                         vertical-stretch: 1;
                         VerticalLayout {
                             alignment: start;
-                            spacing: 8px;
-                            for f in root.filaments: Press {
-                                text: f.name + "   " + f.price;
-                                min-height: 64px;
-                                radius: 0px;
-                                font-size: 20px;
-                                fill: f.pk == root.print-pk ? Mk.workshop : Mk.wit;
-                                ink: f.pk == root.print-pk ? Mk.wit : Mk.inkt;
-                                outline: Mk.lijn;
-                                clicked => {
-                                    root.print-pk = f.pk;
-                                    root.print-name = f.name;
-                                    root.print-per-gram = f.price;
+                            // Only the chosen type's colours take space; the others are 0 high.
+                            for f in root.filaments: Rectangle {
+                                height: f.category == root.print-type ? 72px : 0px;
+                                if f.category == root.print-type: Press {
+                                    y: 0;
+                                    height: 64px;
+                                    text: f.name + "   " + f.price;
+                                    radius: 0px;
+                                    font-size: 20px;
+                                    fill: f.pk == root.print-pk ? Mk.workshop-diep : Mk.wit;
+                                    ink: f.pk == root.print-pk ? Mk.wit : Mk.inkt;
+                                    outline: Mk.lijn;
+                                    clicked => {
+                                        if (root.print-pk == f.pk) {
+                                            root.print-pk = -1;
+                                        } else {
+                                            root.print-pk = f.pk;
+                                            root.print-name = f.name;
+                                            root.print-colour-price = f.price;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -634,7 +677,7 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     width: 380px;
                     spacing: 8px;
-                    Text { text: "2. HOW MANY GRAMS?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
+                    Text { text: "HOW MANY GRAMS?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
                     Text { text: "The weight Bambu Studio / PrusaSlicer shows for your print."; color: Mk.grafiet; font-size: 14px; wrap: word-wrap; }
                     Rectangle {
                         height: 72px;
@@ -648,7 +691,9 @@ export component AppWindow inherits Window {
                     }
                     Keypad { value <=> root.print-grams; }
                     Text {
-                        text: root.print-pk < 0 ? "Pick a filament first." : root.print-name + " · " + root.print-per-gram;
+                        text: root.print-pk >= 0 ? root.print-type + " " + root.print-name + " · " + root.print-colour-price
+                            : root.print-type != "" ? root.print-type + ", no colour · " + root.print-type-price
+                            : "No filament picked: booked without one, at the standard price.";
                         color: Mk.grafiet;
                         font-size: 15px;
                         wrap: word-wrap;
@@ -656,10 +701,10 @@ export component AppWindow inherits Window {
                     Press {
                         text: "ADD TO CART";
                         radius: 0px;
-                        enabled: root.print-pk >= 0 && root.print-grams > 0;
+                        enabled: root.print-grams > 0;
                         fill: Mk.workshop-diep;
                         clicked => {
-                            root.action("print:" + root.print-pk, root.print-grams);
+                            root.action(root.print-pk >= 0 ? "print:" + root.print-pk : root.print-type-pk >= 0 ? "print-type:" + root.print-type-pk : "print:none", root.print-grams);
                             root.print-open = false;
                         }
                     }
