@@ -1,8 +1,8 @@
 # labwc autostart for the kiosk (pi/setup.sh links ~/.config/labwc to pi/labwc).
-# Touch kiosk on the Touch Display 2 (DSI-1, turned to landscape), only when it
+# Touch kiosk on the Touch Display 2 (DSI-1, turned to landscape, 270 = upright in the case), only when it
 # is connected; started again if it ever exits. The TV (HDMI-A-1) as it is.
 if wlr-randr | grep -q '^DSI-1'; then
-    wlr-randr --output DSI-1 --transform 90
+    wlr-randr --output DSI-1 --transform 270
     (cd ~/Interface-stock && while true; do ./kiosk/interface-stock; sleep 2; done) >/dev/null 2>&1 &
 fi
 # TV page on the TV; started again when it exits (the watchdog kills it when the page goes blank).

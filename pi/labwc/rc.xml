@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
-<!-- labwc for the kiosk: touch goes to the Touch Display, each app to its own screen. -->
+<!-- labwc for the kiosk: touch goes to the Touch Display, each app to its own screen. The kiosk sets no app_id (winit), so match its title. -->
 <labwc_config>
   <touch mapToOutput="DSI-1" mouseEmulation="no" />
   <windowRules>
-    <windowRule identifier="interface-stock" serverDecoration="no">
+    <windowRule title="interface-stock" serverDecoration="no">
       <action name="MoveToOutput" output="DSI-1" />
       <action name="ToggleFullscreen" />
     </windowRule>

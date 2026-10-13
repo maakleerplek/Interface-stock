@@ -1,6 +1,7 @@
 # Appended to /boot/firmware/config.txt by pi/setup.sh.
-# The Touch Display 2 (DSI) is found by display_auto_detect=1 (Pi OS default).
-# Only if it is not: add dtoverlay=vc4-kms-dsi-ili9881-7inch, but never without
-# the display connected, or the TV (HDMI) gets no picture either.
+# The Touch Display 2 (DSI) is not found by display_auto_detect on the Pi 3A+, so
+# the overlay is set. Never boot without the display connected: then the TV
+# (HDMI) gets no picture either.
 gpu_mem=64
 disable_splash=1
+dtoverlay=vc4-kms-dsi-ili9881-7inch

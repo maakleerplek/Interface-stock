@@ -32,7 +32,7 @@ sudo touch /etc/cloud/cloud-init.disabled
 sudo install -D -m 644 "$DIR/pi/swap.conf" /etc/rpi/swap.conf.d/50-kiosk.conf
 sudo install -m 644 "$DIR/pi/sysctl.conf" /etc/sysctl.d/90-kiosk.conf
 
-echo "--- Timers: TV on/off, watchdog, nightly update"
+echo "--- Timers: TV on/off, watchdog, nightly update; touch retry at boot"
 for unit in tv-on tv-off; do
     sed "s|/home/pi/Interface-stock|$DIR|g" "$DIR/systemd/$unit.service" | sudo tee /etc/systemd/system/$unit.service > /dev/null
     sudo cp "$DIR/systemd/$unit.timer" /etc/systemd/system/
@@ -40,7 +40,9 @@ done
 sed -e "s|__INSTALL_DIR__|$DIR|g" -e "s|__USER__|$(whoami)|g" "$DIR/systemd/auto-update.service" \
     | sudo tee /etc/systemd/system/interface-stock-update.service > /dev/null
 sudo cp "$DIR/systemd/auto-update.timer" /etc/systemd/system/interface-stock-update.timer
+sudo cp "$DIR/systemd/touch-retry.service" /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable touch-retry.service
 sudo systemctl enable --now tv-on.timer tv-off.timer interface-stock-update.timer
 bash "$DIR/scripts/install-watchdog.sh"
 

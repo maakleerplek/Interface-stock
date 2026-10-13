@@ -8,7 +8,7 @@ use std::sync::Mutex;
 pub struct StockLookupError;
 
 /// One tile of the product grid.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CatalogItem {
     pub part: Part,
     pub category: String,
