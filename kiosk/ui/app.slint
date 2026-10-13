@@ -37,13 +37,15 @@ component Keypad inherits Rectangle {
 
 component Card inherits Rectangle {
     in property <ProductTile> item;
+    /// Picked on the 3D-print screen: a thick border in the tile's colour.
+    in property <bool> selected;
     callback picked(int);
 
     accessible-role: button;
     accessible-label: root.item.name;
     background: touch.pressed ? Mk.beton : Mk.wit;
-    border-width: 1px;
-    border-color: Mk.lijn;
+    border-width: root.selected ? 5px : 1px;
+    border-color: root.selected ? root.item.deep : Mk.lijn;
     opacity: root.item.sold-out ? 0.4 : 1;
     clip: true;
 
@@ -282,6 +284,8 @@ export component AppWindow inherits Window {
     in property <[ProductTile]> filaments;
     in-out property <bool> print-open: false;
     in property <[ProductTile]> filament-types;
+    // The chosen type's colours, filtered by the Rust glue (refilter_colours) like the shop grid.
+    in property <[ProductTile]> print-colours;
     in-out property <string> print-type;
     in-out property <int> print-type-pk: -1;
     in-out property <string> print-type-price;
@@ -304,6 +308,7 @@ export component AppWindow inherits Window {
     callback action(string, int);
     callback pick(int);
     callback select-category(string);
+    callback select-print-type(string);
 
     // --- ink top bar -------------------------------------------------------
     Rectangle {
@@ -433,7 +438,7 @@ export component AppWindow inherits Window {
                     print-touch := TouchArea {
                         clicked => {
                             root.print-pk = -1;
-                            root.print-type = "";
+                            root.select-print-type("");
                             root.print-type-pk = -1;
                             root.print-grams = 0;
                             root.print-open = true;
@@ -627,10 +632,10 @@ export component AppWindow inherits Window {
                             outline: Mk.lijn;
                             clicked => {
                                 if (root.print-type == t.name) {
-                                    root.print-type = "";
+                                    root.select-print-type("");
                                     root.print-type-pk = -1;
                                 } else {
-                                    root.print-type = t.name;
+                                    root.select-print-type(t.name);
                                     root.print-type-pk = t.pk;
                                     root.print-type-price = t.price;
                                 }
@@ -644,30 +649,30 @@ export component AppWindow inherits Window {
                         font-size: root.print-type == "" ? 16px : 20px;
                         font-weight: root.print-type == "" ? 400 : 800;
                     }
-                    Flickable {
+                    // The colours as the shop's tiles, 4 to a row.
+                    colours := Rectangle {
                         vertical-stretch: 1;
-                        VerticalLayout {
-                            alignment: start;
-                            // Only the chosen type's colours take space; the others are 0 high.
-                            for f in root.filaments: Rectangle {
-                                height: f.category == root.print-type ? 72px : 0px;
-                                if f.category == root.print-type: Press {
-                                    y: 0;
-                                    height: 64px;
-                                    text: f.name + "   " + f.price;
-                                    radius: 0px;
-                                    font-size: 20px;
-                                    fill: f.pk == root.print-pk ? Mk.workshop-diep : Mk.wit;
-                                    ink: f.pk == root.print-pk ? Mk.wit : Mk.inkt;
-                                    outline: Mk.lijn;
-                                    clicked => {
-                                        if (root.print-pk == f.pk) {
-                                            root.print-pk = -1;
-                                        } else {
-                                            root.print-pk = f.pk;
-                                            root.print-name = f.name;
-                                            root.print-colour-price = f.price;
-                                        }
+                        clip: true;
+                        property <int> cols: 4;
+                        property <length> gap: 10px;
+                        property <length> tw: (self.width - (self.cols - 1) * self.gap) / self.cols;
+                        property <length> th: 194px;
+                        Flickable {
+                            content-height: Math.ceil(root.print-colours.length / colours.cols) * (colours.th + colours.gap);
+                            for f[i] in root.print-colours: Card {
+                                x: mod(i, colours.cols) * (colours.tw + colours.gap);
+                                y: floor(i / colours.cols) * (colours.th + colours.gap);
+                                width: colours.tw;
+                                height: colours.th;
+                                item: f;
+                                selected: f.pk == root.print-pk;
+                                picked(pk) => {
+                                    if (root.print-pk == pk) {
+                                        root.print-pk = -1;
+                                    } else {
+                                        root.print-pk = pk;
+                                        root.print-name = f.name;
+                                        root.print-colour-price = f.price;
                                     }
                                 }
                             }

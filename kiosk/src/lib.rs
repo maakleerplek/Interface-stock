@@ -172,9 +172,9 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             let (kind, colour) = cart::filament_type(&c.part.name);
             TileData {
                 pk: c.part.pk as i32,
+                initials: initials(&colour),
                 name: colour,
                 price: format!("€{:.2}/g", be.print_price(&c.part)),
-                initials: initials(&c.part.name),
                 light,
                 deep,
                 sold_out: false,
@@ -409,18 +409,21 @@ macro_rules! define_ui_glue {
             let filaments: Vec<ProductTile> = v
                 .filaments
                 .into_iter()
-                .map(|t| ProductTile {
-                    pk: t.pk,
-                    name: t.name.into(),
-                    price: t.price.into(),
-                    initials: t.initials.into(),
-                    light: t.light,
-                    deep: t.deep,
-                    sold_out: false,
-                    category: t.category.into(),
-                    in_cart: 0,
-                    has_image: false,
-                    image: Default::default(),
+                .map(|t| {
+                    let image = t.image.and_then(|p| $crate::thumbnail(&p));
+                    ProductTile {
+                        pk: t.pk,
+                        name: t.name.into(),
+                        price: t.price.into(),
+                        initials: t.initials.into(),
+                        light: t.light,
+                        deep: t.deep,
+                        sold_out: false,
+                        category: t.category.into(),
+                        in_cart: 0,
+                        has_image: image.is_some(),
+                        image: image.unwrap_or_default(),
+                    }
                 })
                 .collect();
             ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
@@ -457,6 +460,15 @@ macro_rules! define_ui_glue {
             ui.set_cart_categories(v.cart_categories.into());
             ui.set_done_summary(v.done_summary.into());
             refilter(ui);
+            refilter_colours(ui);
+        }
+
+        /// The 3D-print screen: only the colours of the chosen filament type.
+        pub fn refilter_colours(ui: &AppWindow) {
+            use $crate::slint::{Model, ModelRc, VecModel};
+            let kind = ui.get_print_type();
+            let tiles: Vec<ProductTile> = ui.get_filaments().iter().filter(|t| t.category == kind).collect();
+            ui.set_print_colours(ModelRc::new(VecModel::from(tiles)));
         }
 
         /// Show only the tiles of the selected category.
@@ -487,6 +499,13 @@ macro_rules! define_ui_glue {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_category(cat);
                     refilter(&ui);
+                }
+            });
+            let weak = ui.as_weak();
+            ui.on_select_print_type(move |kind| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_print_type(kind);
+                    refilter_colours(&ui);
                 }
             });
         }

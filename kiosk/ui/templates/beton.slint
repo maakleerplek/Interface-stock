@@ -273,6 +273,9 @@ export component AppWindow inherits Window {
     in property <[ProductTile]> products;
     in property <[ProductTile]> filaments;   // the 3D-print screen, only in app.slint
     in property <[ProductTile]> filament-types;   // idem
+    in property <[ProductTile]> print-colours;   // idem
+    in-out property <string> print-type;   // idem
+    callback select-print-type(string);   // idem
     in property <[ToolRate]> tools;   // the minutes screen, only in app.slint
     in property <[LaserSessionRow]> laser-sessions;   // idem
 
