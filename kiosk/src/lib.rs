@@ -406,11 +406,14 @@ pub struct Kiosk {
     cfg: Config,
     last_scan: Option<(String, Instant)>,
     tv: Option<tv::Tv>,
+    /// The catalog as last drawn; it loads (and reloads) in the background.
+    catalog: Vec<backend::CatalogItem>,
 }
 
 impl Kiosk {
     pub fn new(be: Box<dyn Backend>, cfg: Config) -> Self {
-        Kiosk { m: Machine::new(Instant::now()), be, cfg, last_scan: None, tv: None }
+        let catalog = be.catalog();
+        Kiosk { m: Machine::new(Instant::now()), be, cfg, last_scan: None, tv: None, catalog }
     }
 
     /// Tell the TV page when someone is shopping, and page it on request.
@@ -463,7 +466,11 @@ impl Kiosk {
         if changed {
             self.report_busy();
         }
-        changed.then(|| self.view(""))
+        // Redraw when the catalog loaded or reloaded, else the grid stays as it was at startup.
+        let catalog = self.be.catalog();
+        let reloaded = catalog != self.catalog;
+        self.catalog = catalog;
+        (changed || reloaded).then(|| self.view(""))
     }
 }
 
