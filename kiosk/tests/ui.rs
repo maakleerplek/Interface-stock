@@ -308,6 +308,12 @@ fn tap_through_every_screen() {
     r.tap("0");
     r.tap("ADD TO CART");
     assert_eq!(r.ui.get_total().as_str(), "€20.00");   // + 30 min × €0.50
+    // A session on the laser timer is paid with one tap, and is not offered twice.
+    r.tap("LASERCUT");
+    r.shot("laser-sessions");
+    r.tap("Ruben  ·  12 min  ·  €6.00");
+    assert_eq!(r.ui.get_total().as_str(), "€26.00");
+    assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
     r.tap("VOLUNTEER DRINK");
     assert!(!r.ui.get_volunteer(), "machine time is never free");
     r.scan("CANCEL");

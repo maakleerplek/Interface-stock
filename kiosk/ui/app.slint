@@ -3,8 +3,8 @@
 // category colour, every dialog is an agenda entry with a coloured left
 // column. No black surfaces; the main action is workshop blue.
 
-import { Mk, Screen, Category, CartRow, ProductTile, ToolRate, Press } from "tokens.slint";
-export { Screen, Category, CartRow, ProductTile, ToolRate }
+import { Mk, Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow, Press } from "tokens.slint";
+export { Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow }
 
 // Number pad of the grams and minutes screens.
 component Keypad inherits Rectangle {
@@ -287,13 +287,15 @@ export component AppWindow inherits Window {
     in-out property <int> print-grams: 0;
     // Machine time: the machines (price per minute, minimum), and the minutes screen's state.
     in property <[ToolRate]> tools;
+    // Open laser timer sessions, paid with one tap on the LASERCUT screen.
+    in property <[LaserSessionRow]> laser-sessions;
     in-out property <bool> time-open: false;
     in-out property <string> time-id;
     in-out property <string> time-name;
     in-out property <float> time-per-minute;
     in-out property <float> time-minimum;
     in-out property <int> time-minutes: 0;
-    property <float> time-price: Math.max(root.time-minutes * root.time-per-minute, root.time-minimum);
+    property <float> time-price: root.time-minutes > 0 ? Math.max(root.time-minutes * root.time-per-minute, root.time-minimum) : 0;
 
     callback action(string, int);
     callback pick(int);
@@ -695,6 +697,30 @@ export component AppWindow inherits Window {
                         color: Mk.inkt;
                         font-size: 20px;
                         wrap: word-wrap;
+                    }
+                    if root.time-id == "laser" && root.laser-sessions.length > 0: Text {
+                        text: "YOUR SESSION ON THE LASER TIMER? TAP IT TO PAY:";
+                        color: Mk.inkt;
+                        font-size: 16px;
+                        font-weight: 800;
+                    }
+                    if root.time-id == "laser": Flickable {
+                        height: root.laser-sessions.length > 0 ? min(3, root.laser-sessions.length) * 72px : 0;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            for s[i] in root.laser-sessions: Press {
+                                text: s.name + "  ·  " + s.minutes + " min  ·  " + s.price;
+                                min-height: 64px;
+                                radius: 0px;
+                                font-size: 20px;
+                                fill: #A8401A;
+                                clicked => {
+                                    root.action("session:" + i, 0);
+                                    root.time-open = false;
+                                }
+                            }
+                        }
                     }
                     Rectangle { vertical-stretch: 1; }
                     Text { text: "TO PAY"; color: Mk.grafiet; font-size: 16px; font-weight: 800; }

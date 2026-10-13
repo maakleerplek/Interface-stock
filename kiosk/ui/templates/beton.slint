@@ -2,8 +2,8 @@
 // thin rules, flat ink buttons, Literata for prices and titles, agenda
 // colours only as category pills.
 
-import { Mk, Screen, Category, CartRow, ProductTile, ToolRate, Press } from "../tokens.slint";
-export { Screen, Category, CartRow, ProductTile, ToolRate }
+import { Mk, Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow, Press } from "../tokens.slint";
+export { Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow }
 
 component Sheet inherits Rectangle {
     background: Mk.wit;
@@ -273,6 +273,7 @@ export component AppWindow inherits Window {
     in property <[ProductTile]> products;
     in property <[ProductTile]> filaments;   // the 3D-print screen, only in app.slint
     in property <[ToolRate]> tools;   // the minutes screen, only in app.slint
+    in property <[LaserSessionRow]> laser-sessions;   // idem
 
     callback action(string, int);
     callback pick(int);

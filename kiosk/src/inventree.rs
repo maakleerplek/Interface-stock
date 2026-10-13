@@ -2,7 +2,7 @@
 //! `barcode_inventree.py` (lookups, stock levels, sale prices, stock
 //! removal, barcode cache) plus a cached product catalog for the grid.
 
-use crate::backend::{Backend, CatalogItem, StockLookupError, DEFAULT_PRINT_PRICE, DEFAULT_TOOL_PRICE};
+use crate::backend::{Backend, CatalogItem, LaserSession, StockLookupError, DEFAULT_PRINT_PRICE, DEFAULT_TOOL_PRICE};
 use crate::cart::{Cart, Part, Print, Tool, ToolTime};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 const REFRESH: Duration = Duration::from_secs(300);
 /// After a failed reload, try again this soon.
 const RETRY: Duration = Duration::from_secs(30);
+/// How often the laser timer's sessions are read.
+const LASER_POLL: Duration = Duration::from_secs(5);
 /// A barcode that found nothing is not looked up again for this long.
 const MISS_TTL: Duration = Duration::from_secs(60);
 /// The barcode cache is written to the SD card at most this often.
@@ -38,6 +40,8 @@ pub struct InvenTreeConfig {
     /// Machine price per minute when InvenTree has none (LASER_PRICE_PER_MIN, CNC_PRICE_PER_MIN).
     pub laser_price: f64,
     pub cnc_price: f64,
+    /// The stock app's laser service (laser timer sessions), LASER_URL. Gets no token.
+    pub laser_url: String,
 }
 
 impl InvenTreeConfig {
@@ -55,6 +59,7 @@ impl InvenTreeConfig {
             print_price: var("PRINT_PRICE_PER_GRAM").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PRINT_PRICE),
             laser_price: var("LASER_PRICE_PER_MIN").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_TOOL_PRICE),
             cnc_price: var("CNC_PRICE_PER_MIN").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_TOOL_PRICE),
+            laser_url: var("LASER_URL").unwrap_or_else(|| "https://10.72.1.246:8086/laser/api".into()).trim_end_matches('/').into(),
         }
     }
 }
@@ -135,6 +140,12 @@ struct Shared {
     misses: Mutex<HashMap<String, Instant>>,
     category_names: Mutex<HashMap<i64, String>>,
     refresh_now: AtomicBool,
+    /// Open laser timer sessions, polled every few seconds.
+    laser: RwLock<Vec<LaserSession>>,
+    /// Sold laser sessions not marked paid on the laser service yet: (session id, order).
+    /// Retried in the background and never offered again meanwhile.
+    /// shortcut: kept in memory only, lost on a restart; persist it if the laser service is often away.
+    laser_unmarked: Mutex<Vec<(String, String)>>,
 }
 
 pub struct InvenTree {
@@ -190,13 +201,13 @@ pub fn print_line(order: i64, p: &Print) -> Value {
 }
 
 /// Machine time as a sales-order extra line. The minimum is folded into the
-/// price per minute, so minutes × price stays what was paid. No description:
-/// the analytics read that as time typed in at the till.
+/// price per minute, so minutes × price stays what was paid.
 pub fn time_line(order: i64, t: &ToolTime) -> Value {
     json!({
         "order": order,
         "reference": t.tool.reference(),
-        "description": "",
+        // The session's name, as the stock app books it; none = typed in at the till.
+        "description": t.session.as_ref().map_or("", |(_, name)| name.as_str()),
         "quantity": t.minutes,
         "price": format!("{:.4}", t.price() / t.minutes as f64),
         "price_currency": "EUR",
@@ -390,7 +401,43 @@ impl Shared {
     /// Book 3D prints and machine time as one sales order of extra lines: reference "3D printing",
     /// the filament as description, grams × price per gram. The stock app
     /// books them the same way, so the analytics see both.
-    fn sell_services(&self, prints: &[Print], times: &[ToolTime]) -> Result<(), String> {
+    /// Retry marking sold sessions paid, then read the open sessions with time that are not in a web checkout.
+    fn poll_laser(&self) {
+        let pending: Vec<_> = self.laser_unmarked.lock().unwrap().clone();
+        for (id, order) in pending {
+            if self.mark_laser_paid(&id, &order) {
+                self.laser_unmarked.lock().unwrap().retain(|(i, _)| *i != id);
+            }
+        }
+        let Ok(mut resp) = self.agent.get(format!("{}/sessions", self.cfg.laser_url)).call() else { return };
+        let Ok(v) = resp.body_mut().read_json::<Value>() else { return };
+        let skip: Vec<String> = self.laser_unmarked.lock().unwrap().iter().map(|(i, _)| i.clone()).collect();
+        let sessions = v
+            .get("sessions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|s| s.get("checkout_at").is_none_or(Value::is_null))
+            .filter_map(|s| {
+                let id = s.get("id")?.as_str()?.to_string();
+                let minutes = s.get("minutes")?.as_u64()? as u32;
+                let name = s.get("name")?.as_str()?.to_string();
+                (minutes > 0 && !skip.contains(&id)).then_some(LaserSession { id, name, minutes })
+            })
+            .collect();
+        *self.laser.write().unwrap() = sessions;
+    }
+
+    /// Tell the laser service the session is paid on `order`, like the stock app's checkout does.
+    fn mark_laser_paid(&self, id: &str, order: &str) -> bool {
+        self.agent
+            .post(format!("{}/sessions/{id}/paid", self.cfg.laser_url))
+            .send_json(json!({ "order": order }))
+            .is_ok_and(|r| r.status().is_success())
+    }
+
+    /// Returns the sales order's reference.
+    fn sell_services(&self, prints: &[Print], times: &[ToolTime]) -> Result<String, String> {
         const T: Duration = Duration::from_secs(10);
         let ok = |r: Result<(u16, Value), String>| match r {
             Ok((200 | 201, v)) => Ok(v),
@@ -404,6 +451,7 @@ impl Shared {
             .ok_or("No till customer in InvenTree")?;
         let order = ok(self.post("/api/order/so/", &json!({"customer": customer, "description": "Machine use via Interface-stock"}), T))?;
         let pk = order.get("pk").and_then(Value::as_i64).ok_or("No sales order created")?;
+        let reference = order.get("reference").and_then(Value::as_str).unwrap_or_default().to_string();
         let book = || -> Result<(), String> {
             for line in prints.iter().map(|p| print_line(pk, p)).chain(times.iter().map(|t| time_line(pk, t))) {
                 ok(self.post("/api/order/so-extra-line/", &line, T))?;
@@ -420,7 +468,8 @@ impl Shared {
         };
         book().inspect_err(|_| {
             let _ = self.post(&format!("/api/order/so/{pk}/cancel/"), &json!({}), T);
-        })
+        })?;
+        Ok(reference)
     }
 
     /// (stock item pk, quantity) of every in-stock item of a part.
@@ -546,8 +595,15 @@ impl InvenTree {
             misses: Default::default(),
             category_names: Default::default(),
             refresh_now: AtomicBool::new(true),
+            laser: Default::default(),
+            laser_unmarked: Default::default(),
         });
         let bg = sh.clone();
+        let laser = sh.clone();
+        std::thread::spawn(move || loop {
+            laser.poll_laser();
+            std::thread::sleep(LASER_POLL);
+        });
         std::thread::spawn(move || {
             let mut next = Instant::now();
             loop {
@@ -678,6 +734,10 @@ impl Backend for InvenTree {
         self.sh.catalog.read().unwrap().print_prices.get(&part.pk).copied().unwrap_or(self.sh.cfg.print_price)
     }
 
+    fn laser_sessions(&self) -> Vec<LaserSession> {
+        self.sh.laser.read().unwrap().clone()
+    }
+
     /// From the machine's part in InvenTree (sale price + "Minimum"), like the TV's price list.
     fn tool_rate(&self, tool: Tool) -> (f64, f64) {
         let fallback = match tool {
@@ -726,7 +786,14 @@ impl Backend for InvenTree {
         // Prints first: the stock is verified above, so the removal below rarely
         // fails, and a failed print booking leaves the stock untouched.
         if cart.always_paid() {
-            sh.sell_services(&cart.prints, &cart.times)?;
+            let order = sh.sell_services(&cart.prints, &cart.times)?;
+            // The sale stands; a session the laser service could not take now is retried by poll_laser.
+            for (id, _) in cart.times.iter().filter_map(|t| t.session.as_ref()) {
+                if !sh.mark_laser_paid(id, &order) {
+                    sh.laser_unmarked.lock().unwrap().push((id.clone(), order.clone()));
+                }
+                sh.laser.write().unwrap().retain(|s| s.id != *id);
+            }
         }
         if !lines.is_empty() {
             let payload = removal_payload(&lines, cart.volunteer, &sh.cfg.htl_name);
@@ -762,11 +829,13 @@ mod tests {
 
     #[test]
     fn time_line_keeps_minutes_and_pays_the_minimum() {
-        let job = ToolTime { tool: Tool::Laser, minutes: 4, per_minute: 0.5, minimum: 5.0 };
+        let job = ToolTime { tool: Tool::Laser, minutes: 4, per_minute: 0.5, minimum: 5.0, session: None };
         let l = time_line(7, &job);
         assert_eq!((l["reference"].as_str(), l["quantity"].as_u64(), l["price"].as_str()), (Some("Lasertime"), Some(4), Some("1.2500")));
         let job = ToolTime { tool: Tool::Cnc, minutes: 30, ..job };
         assert_eq!((time_line(7, &job)["reference"].as_str(), time_line(7, &job)["price"].as_str()), (Some("CNC time"), Some("0.5000")));
+        let job = ToolTime { tool: Tool::Laser, session: Some(("s1".into(), "Ruben".into())), ..job };
+        assert_eq!(time_line(7, &job)["description"].as_str(), Some("Ruben"));
     }
 
     #[test]

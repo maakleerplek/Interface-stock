@@ -128,6 +128,8 @@ pub struct View {
     pub filaments: Vec<TileData>,
     /// Machines for the minutes screen: (id, name, price per minute, minimum per job).
     pub tools: Vec<(String, String, f32, f32)>,
+    /// Laser timer sessions to pay: (name, minutes, price).
+    pub laser_sessions: Vec<(String, i32, String)>,
     pub cart_categories: String,
     pub done_summary: String,
 }
@@ -255,6 +257,13 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 (t.id().into(), t.label().to_uppercase(), per_minute as f32, minimum as f32)
             })
             .collect(),
+        laser_sessions: {
+            let (per_minute, minimum) = be.tool_rate(cart::Tool::Laser);
+            m.open_sessions(be)
+                .into_iter()
+                .map(|s| (s.name, s.minutes as i32, format_price((s.minutes as f64 * per_minute).max(minimum))))
+                .collect()
+        },
         cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
             "{done_units} drink{} · {}",
@@ -285,6 +294,10 @@ pub fn action_from(name: &str, n: i32) -> Option<Action> {
     // "print:<filament pk>" with the grams as n, from the 3D-print screen.
     if let Some(pk) = name.strip_prefix("print:") {
         return Some(Action::Print(pk.parse().ok()?, n.max(0) as u32));
+    }
+    // "session:<n>", a laser timer session from the minutes screen.
+    if let Some(n) = name.strip_prefix("session:") {
+        return Some(Action::Session(n.parse().ok()?));
     }
     // "time:<machine>" with the minutes as n, from the minutes screen.
     if let Some(id) = name.strip_prefix("time:") {
@@ -392,6 +405,12 @@ macro_rules! define_ui_glue {
                 .map(|(id, name, per_minute, minimum)| ToolRate { id: id.into(), name: name.into(), per_minute, minimum })
                 .collect();
             ui.set_tools(ModelRc::new(VecModel::from(tools)));
+            let sessions: Vec<LaserSessionRow> = v
+                .laser_sessions
+                .into_iter()
+                .map(|(name, minutes, price)| LaserSessionRow { name: name.into(), minutes, price: price.into() })
+                .collect();
+            ui.set_laser_sessions(ModelRc::new(VecModel::from(sessions)));
             ui.set_cart_categories(v.cart_categories.into());
             ui.set_done_summary(v.done_summary.into());
             refilter(ui);

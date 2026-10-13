@@ -95,6 +95,8 @@ pub struct ToolTime {
     pub minutes: u32,
     pub per_minute: f64,
     pub minimum: f64,
+    /// The laser timer's session this time comes from: (id, name). Marked paid after the sale.
+    pub session: Option<(String, String)>,
 }
 
 impl ToolTime {
@@ -222,7 +224,7 @@ mod tests {
 
     #[test]
     fn machine_time_costs_at_least_the_minimum() {
-        let job = |minutes| ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0 };
+        let job = |minutes| ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, session: None };
         assert!((job(4).price() - 5.0).abs() < 1e-9);    // 4 min × €0.50 = €2, minimum €5
         assert!((job(25).price() - 12.5).abs() < 1e-9);
         let mut c = Cart::default();

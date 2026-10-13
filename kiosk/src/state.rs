@@ -2,7 +2,7 @@
 //! version: touch buttons and command barcodes become the same `Action`, so
 //! both inputs behave identically. No I/O here except through `Backend`.
 
-use crate::backend::Backend;
+use crate::backend::{Backend, LaserSession};
 use crate::cart::{Cart, Part, Print, Tool, ToolTime};
 use std::time::{Duration, Instant};
 
@@ -43,6 +43,8 @@ pub enum Action {
     Print(i64, u32),
     /// Machine time: the machine and its minutes, from the minutes screen.
     Time(Tool, u32),
+    /// Pay laser timer session `n` of `open_sessions`.
+    Session(usize),
     /// One unit less of cart line `n`.
     Decrement(usize),
     PagePrev,
@@ -221,7 +223,25 @@ impl Machine {
         }
         let (per_minute, minimum) = be.tool_rate(tool);
         self.info(format!("{} added: {minutes} min", tool.label()));
-        self.cart.times.push(ToolTime { tool, minutes, per_minute, minimum });
+        self.cart.times.push(ToolTime { tool, minutes, per_minute, minimum, session: None });
+        Ok(())
+    }
+
+    /// Laser timer sessions to pay, without the ones already in this cart.
+    pub fn open_sessions(&self, be: &dyn Backend) -> Vec<LaserSession> {
+        let in_cart = |s: &LaserSession| self.cart.times.iter().any(|t| t.session.as_ref().is_some_and(|(id, _)| *id == s.id));
+        be.laser_sessions().into_iter().filter(|s| !in_cart(s)).collect()
+    }
+
+    /// A laser timer session goes in the cart with its minutes, at the laser's price.
+    fn add_session(&mut self, be: &dyn Backend, n: usize) -> Result<(), String> {
+        if self.cart.volunteer {
+            return Err("Machine time is always paid: tap VOLUNTEER off first.".into());
+        }
+        let s = self.open_sessions(be).into_iter().nth(n).ok_or("That laser session is gone. Try again.")?;
+        let (per_minute, minimum) = be.tool_rate(Tool::Laser);
+        self.info(format!("Laser session {} added: {} min", s.name, s.minutes));
+        self.cart.times.push(ToolTime { tool: Tool::Laser, minutes: s.minutes, per_minute, minimum, session: Some((s.id, s.name)) });
         Ok(())
     }
 
@@ -260,6 +280,10 @@ impl Machine {
                 Err(e) => self.error(e),
             },
             (State::Idle | State::Shopping, Event::Button(Time(tool, minutes))) => match self.add_time(be, tool, minutes) {
+                Ok(()) => self.go(State::Shopping, now),
+                Err(e) => self.error(e),
+            },
+            (State::Idle | State::Shopping, Event::Button(Session(n))) => match self.add_session(be, n) {
                 Ok(()) => self.go(State::Shopping, now),
                 Err(e) => self.error(e),
             },
@@ -445,6 +469,19 @@ mod tests {
         assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
         run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
         assert_eq!(m.state, State::QrDisplay);
+    }
+
+    #[test]
+    fn a_laser_session_goes_in_once_with_its_minutes() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        m.handle(&be, Event::Button(Action::Session(0)), Instant::now());
+        assert_eq!(m.cart.times.len(), 1);
+        assert_eq!((m.cart.times[0].minutes, m.cart.times[0].session.as_ref().map(|s| s.1.as_str())), (12, Some("Ruben")));
+        assert!(m.open_sessions(&be).is_empty(), "a session in the cart is not offered again");
+        m.handle(&be, Event::Button(Action::Session(0)), Instant::now());
+        assert_eq!(m.cart.times.len(), 1);
+        assert!(m.message.as_ref().unwrap().error);
+        assert_eq!(crate::action_from("session:0", 0), Some(Action::Session(0)));
     }
 
     #[test]

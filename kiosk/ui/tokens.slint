@@ -61,6 +61,13 @@ export struct ToolRate {
     minimum: float,
 }
 
+/// An open laser timer session to pay at the kiosk.
+export struct LaserSessionRow {
+    name: string,
+    minutes: int,
+    price: string,
+}
+
 export struct ProductTile {
     pk: int,
     name: string,
