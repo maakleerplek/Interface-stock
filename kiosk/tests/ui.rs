@@ -293,6 +293,27 @@ fn tap_through_every_screen() {
     r.scan("CANCEL");
     assert_eq!(r.units(), 0);
 
+    // Machine time: 4 minutes of lasercut costs the €5 minimum, never free.
+    r.tap("LASERCUT");
+    assert!(r.ui.get_time_open());
+    r.tap("4");
+    r.shot("laser-minutes");
+    r.tap("ADD TO CART");
+    assert!(!r.ui.get_time_open());
+    assert_eq!(r.ui.get_rows().row_count(), 1);
+    assert_eq!(r.ui.get_total().as_str(), "€5.00");
+    r.shot("laser-in-cart");
+    r.tap("CNC");
+    r.tap("3");
+    r.tap("0");
+    r.tap("ADD TO CART");
+    assert_eq!(r.ui.get_total().as_str(), "€20.00");   // + 30 min × €0.50
+    r.tap("VOLUNTEER DRINK");
+    assert!(!r.ui.get_volunteer(), "machine time is never free");
+    r.scan("CANCEL");
+    r.scan("CANCEL");
+    assert_eq!(r.units(), 0);
+
     // Frames that only exist for a moment.
     apply(&r.ui, r.kiosk.view("FIL-PLA-DBLU"));
     r.shot("searching");

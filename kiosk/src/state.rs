@@ -3,7 +3,7 @@
 //! both inputs behave identically. No I/O here except through `Backend`.
 
 use crate::backend::Backend;
-use crate::cart::{Cart, Part, Print};
+use crate::cart::{Cart, Part, Print, Tool, ToolTime};
 use std::time::{Duration, Instant};
 
 /// Inactive carts are dropped after this long.
@@ -14,6 +14,7 @@ pub const VOLUNTEER_DONE_FOR: Duration = Duration::from_secs(4);
 pub const PAY_CONFIRM_FOR: Duration = Duration::from_secs(30);
 /// Banner messages disappear after this long.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(6);
+const ALWAYS_PAID: &str = "3D prints and machine time are always paid, also for volunteers.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -40,6 +41,8 @@ pub enum Action {
     Increment(usize),
     /// A 3D print: filament part pk and grams, from the print screen.
     Print(i64, u32),
+    /// Machine time: the machine and its minutes, from the minutes screen.
+    Time(Tool, u32),
     /// One unit less of cart line `n`.
     Decrement(usize),
     PagePrev,
@@ -208,9 +211,23 @@ impl Machine {
         Ok(())
     }
 
+    /// Machine time goes in the cart at the machine's price, at least its minimum.
+    fn add_time(&mut self, be: &dyn Backend, tool: Tool, minutes: u32) -> Result<(), String> {
+        if self.cart.volunteer {
+            return Err("Machine time is always paid: tap VOLUNTEER off first.".into());
+        }
+        if minutes == 0 {
+            return Err("Enter the minutes the machine ran.".into());
+        }
+        let (per_minute, minimum) = be.tool_rate(tool);
+        self.info(format!("{} added: {minutes} min", tool.label()));
+        self.cart.times.push(ToolTime { tool, minutes, per_minute, minimum });
+        Ok(())
+    }
+
     fn toggle_volunteer(&mut self) {
-        if !self.cart.prints.is_empty() {
-            return self.error("3D prints are always paid, also for volunteers.");
+        if self.cart.always_paid() {
+            return self.error(ALWAYS_PAID);
         }
         self.cart.volunteer = !self.cart.volunteer;
         if self.cart.volunteer {
@@ -239,6 +256,10 @@ impl Machine {
         use Action::*;
         match (self.state, event) {
             (State::Idle | State::Shopping, Event::Button(Print(pk, grams))) => match self.add_print(be, pk, grams) {
+                Ok(()) => self.go(State::Shopping, now),
+                Err(e) => self.error(e),
+            },
+            (State::Idle | State::Shopping, Event::Button(Time(tool, minutes))) => match self.add_time(be, tool, minutes) {
                 Ok(()) => self.go(State::Shopping, now),
                 Err(e) => self.error(e),
             },
@@ -309,10 +330,10 @@ impl Machine {
             (State::CheckoutConfirm, Event::Button(Cancel)) => self.go(State::CancelConfirm, now),
             (State::CheckoutConfirm, Event::Button(Volunteer)) => {
                 // Stay: the confirm screen redraws with the new header and total.
-                if self.cart.prints.is_empty() {
-                    self.cart.volunteer = !self.cart.volunteer;
+                if self.cart.always_paid() {
+                    self.error(ALWAYS_PAID);
                 } else {
-                    self.error("3D prints are always paid, also for volunteers.");
+                    self.cart.volunteer = !self.cart.volunteer;
                 }
             }
             (State::CheckoutConfirm, Event::Button(_)) => {
@@ -336,12 +357,12 @@ impl Machine {
         None
     }
 
-    fn after_removal(&mut self, removed: Option<Part>, now: Instant) {
+    fn after_removal(&mut self, removed: Option<String>, now: Instant) {
         if self.cart.is_empty() {
             self.reset(now);
             self.info("Cart is now empty.");
-        } else if let Some(p) = removed {
-            self.info(format!("Removed {}", p.name));
+        } else if let Some(name) = removed {
+            self.info(format!("Removed {name}"));
         }
     }
 
@@ -409,6 +430,27 @@ mod tests {
         assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
         run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
         assert_eq!(m.state, State::QrDisplay);
+    }
+
+    #[test]
+    fn machine_time_is_paid_and_never_free() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        let time = |m: &mut Machine, minutes| m.handle(&be, Event::Button(Action::Time(Tool::Laser, minutes)), Instant::now());
+        time(&mut m, 0);
+        assert_eq!(m.state, State::Idle);                           // no minutes: nothing added
+        time(&mut m, 4);
+        assert_eq!((m.state, m.cart.times.len()), (State::Shopping, 1));
+        assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // 4 min, at least the €5 minimum
+        run(&mut m, &be, &["VOLUNTEER"]);
+        assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
+        run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
+        assert_eq!(m.state, State::QrDisplay);
+    }
+
+    #[test]
+    fn time_action_from_the_touch_screen() {
+        assert_eq!(crate::action_from("time:cnc", 30), Some(Action::Time(Tool::Cnc, 30)));
+        assert_eq!(crate::action_from("time:drill", 30), None);
     }
 
     #[test]

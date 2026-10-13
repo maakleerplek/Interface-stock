@@ -74,6 +74,8 @@ pub fn category_colors(category: &str) -> (Color, Color) {
         "drinks" | "dranken" => (rgb(0xCCDCF4), rgb(0x2F4F85)),
         "filament" => (rgb(0xCCDC9C), rgb(0x4A5C22)),
         "wood" | "hout" => (rgb(0xECB47C), rgb(0x7F4A12)),
+        "lasercut" => (rgb(0xF6C9B4), rgb(0xA8401A)),
+        "cnc" => (rgb(0xC9D3D8), rgb(0x34505E)),
         _ => (rgb(0xC4B4E4), rgb(0x4B3A7A)),
     }
 }
@@ -98,6 +100,8 @@ pub struct RowData {
     pub qty: i32,
     pub price: String,
     pub deep: Color,
+    /// A 3D print or machine job: no + on its row.
+    pub whole: bool,
 }
 
 pub struct CategoryData {
@@ -122,6 +126,8 @@ pub struct View {
     pub catalog: Vec<TileData>,
     /// Filaments for the 3D-print screen, price per gram.
     pub filaments: Vec<TileData>,
+    /// Machines for the minutes screen: (id, name, price per minute, minimum per job).
+    pub tools: Vec<(String, String, f32, f32)>,
     pub cart_categories: String,
     pub done_summary: String,
 }
@@ -134,6 +140,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
     if !m.cart.prints.is_empty() {
         cats.push("3d print".into());
     }
+    cats.extend(m.cart.times.iter().map(|t| t.tool.label().to_lowercase()));
     cats.sort();
     cats.dedup();
     let qr = (m.state == State::QrDisplay)
@@ -211,12 +218,21 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 qty: *q as i32,
                 price: format_price(price(p) * *q as f64),
                 deep: category_colors(&be.category(p)).1,
+                whole: false,
             })
             .chain(m.cart.prints.iter().map(|p| RowData {
                 name: format!("3D print · {} · {} g", p.part.name, p.grams),
                 qty: 1,
                 price: format_price(p.price()),
                 deep: category_colors("filament").1,
+                whole: true,
+            }))
+            .chain(m.cart.times.iter().map(|t| RowData {
+                name: format!("{} · {} min", t.tool.label(), t.minutes),
+                qty: 1,
+                price: format_price(t.price()),
+                deep: category_colors(t.tool.label()).1,
+                whole: true,
             }))
             .collect(),
         units: m.cart.units() as i32,
@@ -232,6 +248,13 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             .collect(),
         catalog: tiles,
         filaments,
+        tools: cart::Tool::ALL
+            .into_iter()
+            .map(|t| {
+                let (per_minute, minimum) = be.tool_rate(t);
+                (t.id().into(), t.label().to_uppercase(), per_minute as f32, minimum as f32)
+            })
+            .collect(),
         cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
             "{done_units} drink{} · {}",
@@ -262,6 +285,10 @@ pub fn action_from(name: &str, n: i32) -> Option<Action> {
     // "print:<filament pk>" with the grams as n, from the 3D-print screen.
     if let Some(pk) = name.strip_prefix("print:") {
         return Some(Action::Print(pk.parse().ok()?, n.max(0) as u32));
+    }
+    // "time:<machine>" with the minutes as n, from the minutes screen.
+    if let Some(id) = name.strip_prefix("time:") {
+        return Some(Action::Time(cart::Tool::from_id(id)?, n.max(0) as u32));
     }
     let n = n.max(0) as usize;
     Some(match name {
@@ -302,7 +329,7 @@ macro_rules! define_ui_glue {
             let rows: Vec<CartRow> = v
                 .rows
                 .into_iter()
-                .map(|r| CartRow { name: r.name.into(), qty: r.qty, price: r.price.into(), deep: r.deep })
+                .map(|r| CartRow { name: r.name.into(), qty: r.qty, price: r.price.into(), deep: r.deep, whole: r.whole })
                 .collect();
             ui.set_rows(ModelRc::new(VecModel::from(rows)));
             ui.set_units(v.units);
@@ -359,6 +386,12 @@ macro_rules! define_ui_glue {
                 })
                 .collect();
             ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
+            let tools: Vec<ToolRate> = v
+                .tools
+                .into_iter()
+                .map(|(id, name, per_minute, minimum)| ToolRate { id: id.into(), name: name.into(), per_minute, minimum })
+                .collect();
+            ui.set_tools(ModelRc::new(VecModel::from(tools)));
             ui.set_cart_categories(v.cart_categories.into());
             ui.set_done_summary(v.done_summary.into());
             refilter(ui);
