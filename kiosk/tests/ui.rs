@@ -253,6 +253,9 @@ fn tap_through_every_screen() {
     assert_eq!(r.ui.get_screen(), Screen::Shop);
     r.tap("CHECKOUT  →");
     r.tap("VOLUNTEER");
+    assert!(!r.ui.get_volunteer(), "not before the pop-up is confirmed");
+    r.shot("volunteer-ask");
+    r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer());
     r.shot("volunteer-oath");
     r.tap("✓ VOLUNTEER");
@@ -274,6 +277,10 @@ fn tap_through_every_screen() {
     // Volunteer drink start to finish.
     r.tap("Coca-Cola 33cl");
     r.tap("VOLUNTEER DRINK");
+    r.tap("Back, I am not a volunteer");
+    assert!(!r.ui.get_volunteer(), "BACK leaves it off");
+    r.tap("VOLUNTEER DRINK");
+    r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer());
     r.shot("volunteer-on");
     r.tap("CHECKOUT  →");
@@ -334,7 +341,8 @@ fn tap_through_every_screen() {
     assert_eq!(r.ui.get_total().as_str(), "€26.00");
     assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
     r.tap("VOLUNTEER DRINK");
-    assert!(!r.ui.get_volunteer(), "machine time is never free");
+    r.tap("YES, I'M A VOLUNTEER");
+    assert!(r.ui.get_volunteer(), "a volunteer's machine time is free, booked at €0");
     r.scan("CANCEL");
     r.scan("CANCEL");
     assert_eq!(r.units(), 0);

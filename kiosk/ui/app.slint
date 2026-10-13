@@ -303,6 +303,8 @@ export component AppWindow inherits Window {
     in-out property <float> time-per-minute;
     in-out property <float> time-minimum;
     in-out property <int> time-minutes: 0;
+    // "For volunteers only" pop-up before VOLUNTEER turns on, so a visitor does not tap it by accident.
+    in-out property <bool> volunteer-ask: false;
     property <float> time-price: root.time-minutes > 0 ? Math.max(root.time-minutes * root.time-per-minute, root.time-minimum) : 0;
 
     callback action(string, int);
@@ -579,7 +581,7 @@ export component AppWindow inherits Window {
                             font-size: 18px;
                             weight: 800;
                             accessible-label: root.volunteer ? "VOLUNTEER: FREE" : "VOLUNTEER DRINK";
-                            clicked => { root.action("volunteer", 0); }
+                            clicked => { if (root.volunteer) { root.action("volunteer", 0); } else { root.volunteer-ask = true; } }
                         }
                         Press {
                             text: "CANCEL";
@@ -856,7 +858,7 @@ export component AppWindow inherits Window {
 
         // --- checkout / oath -------------------------------------------------
         if root.screen == Screen.checkout-confirm: Entry {
-            kicker: root.volunteer ? "VOLUNTEER DRINK" : "STEP 1 OF 2";
+            kicker: root.volunteer ? "VOLUNTEER" : "STEP 1 OF 2";
             title: root.volunteer ? "The oath" : "Check your cart";
             light: root.volunteer ? Mk.openlab : Mk.herstel;
             deep: root.volunteer ? Mk.openlab-diep : Mk.herstel-diep;
@@ -865,7 +867,7 @@ export component AppWindow inherits Window {
                 spacing: 14px;
                 if root.volunteer: Text {
                     vertical-stretch: 1;
-                    text: "By my honour and the power vested in me, I solemnly swear by the spirit of HTL that I worked well today and deserve a free drink.";
+                    text: "By my honour and the power vested in me, I solemnly swear by the spirit of HTL that I am a volunteer and that this is fair: a drink I earned, or material and machine time for me or for the lab.";
                     color: Mk.inkt;
                     font-family: Mk.serif;
                     font-size: 30px;
@@ -918,7 +920,7 @@ export component AppWindow inherits Window {
                         ink: Mk.openlab-diep;
                         font-size: 20px;
                         weight: 800;
-                        clicked => { root.action("volunteer", 0); }
+                        clicked => { if (root.volunteer) { root.action("volunteer", 0); } else { root.volunteer-ask = true; } }
                     }
                     Press {
                         text: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
@@ -1029,7 +1031,7 @@ export component AppWindow inherits Window {
 
         if root.screen == Screen.volunteer-done: Entry {
             kicker: "THANK YOU";
-            title: "Enjoy your drink!";
+            title: "Booked as volunteer use. Enjoy!";
             light: Mk.openlab;
             deep: Mk.openlab-diep;
             Text {
@@ -1063,6 +1065,53 @@ export component AppWindow inherits Window {
                 font-size: 56px;
                 font-weight: 700;
                 horizontal-alignment: center;
+            }
+        }
+    }
+
+    // --- before VOLUNTEER turns on: who it is for ---------------------------
+    if root.volunteer-ask: Rectangle {
+        background: #000000aa;
+        TouchArea { }   // nothing behind it reacts while it is open
+        Rectangle {
+            width: 760px;
+            height: 420px;
+            background: Mk.wit;
+            border-width: 4px;
+            border-color: Mk.openlab-diep;
+            VerticalLayout {
+                padding: 36px;
+                spacing: 18px;
+                Text { text: "FOR VOLUNTEERS ONLY"; color: Mk.openlab-diep; font-size: 20px; font-weight: 800; }
+                Text { text: "Are you an HTL volunteer?"; color: Mk.inkt; font-size: 36px; font-weight: 800; wrap: word-wrap; }
+                Text {
+                    text: "Volunteer mode makes the cart free: a drink you earned, or material and machine time for yourself or for the lab. It is booked as volunteer use.\nVisitors pay as usual: tap BACK.";
+                    color: Mk.inkt;
+                    font-size: 20px;
+                    wrap: word-wrap;
+                    vertical-stretch: 1;
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Press {
+                        text: "← BACK";
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.lijn;
+                        accessible-label: "Back, I am not a volunteer";
+                        clicked => { root.volunteer-ask = false; }
+                    }
+                    Press {
+                        text: "YES, I'M A VOLUNTEER";
+                        radius: 0px;
+                        fill: Mk.openlab-diep;
+                        clicked => {
+                            root.volunteer-ask = false;
+                            root.action("volunteer", 0);
+                        }
+                    }
+                }
             }
         }
     }

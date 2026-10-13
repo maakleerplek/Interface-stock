@@ -14,7 +14,6 @@ pub const VOLUNTEER_DONE_FOR: Duration = Duration::from_secs(4);
 pub const PAY_CONFIRM_FOR: Duration = Duration::from_secs(30);
 /// Banner messages disappear after this long.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(6);
-const ALWAYS_PAID: &str = "3D prints and machine time are always paid, also for volunteers.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -212,9 +211,6 @@ impl Machine {
     /// A 3D print goes in the cart at the filament's price per gram; only a type is its
     /// cheapest filament's price, only grams the default price.
     fn add_print(&mut self, be: &dyn Backend, pick: PrintPick, grams: u32) -> Result<(), String> {
-        if self.cart.volunteer {
-            return Err("3D prints are always paid: tap VOLUNTEER off first.".into());
-        }
         if grams == 0 {
             return Err("Enter the grams of your print.".into());
         }
@@ -242,9 +238,6 @@ impl Machine {
 
     /// Machine time goes in the cart at the machine's price, at least its minimum.
     fn add_time(&mut self, be: &dyn Backend, tool: Tool, minutes: u32) -> Result<(), String> {
-        if self.cart.volunteer {
-            return Err("Machine time is always paid: tap VOLUNTEER off first.".into());
-        }
         if minutes == 0 {
             return Err("Enter the minutes the machine ran.".into());
         }
@@ -262,9 +255,6 @@ impl Machine {
 
     /// A laser timer session goes in the cart with its minutes, at the laser's price.
     fn add_session(&mut self, be: &dyn Backend, n: usize) -> Result<(), String> {
-        if self.cart.volunteer {
-            return Err("Machine time is always paid: tap VOLUNTEER off first.".into());
-        }
         let s = self.open_sessions(be).into_iter().nth(n).ok_or("That laser session is gone. Try again.")?;
         let (per_minute, minimum) = be.tool_rate(Tool::Laser);
         self.info(format!("Laser session {} added: {} min", s.name, s.minutes));
@@ -272,10 +262,8 @@ impl Machine {
         Ok(())
     }
 
+    /// Volunteer use is free and booked as such (machine time and prints at €0), for the analytics.
     fn toggle_volunteer(&mut self) {
-        if self.cart.always_paid() {
-            return self.error(ALWAYS_PAID);
-        }
         self.cart.volunteer = !self.cart.volunteer;
         if self.cart.volunteer {
             self.info("Volunteer drink: cart is FREE");
@@ -381,11 +369,7 @@ impl Machine {
             (State::CheckoutConfirm, Event::Button(Cancel)) => self.go(State::CancelConfirm, now),
             (State::CheckoutConfirm, Event::Button(Volunteer)) => {
                 // Stay: the confirm screen redraws with the new header and total.
-                if self.cart.always_paid() {
-                    self.error(ALWAYS_PAID);
-                } else {
-                    self.cart.volunteer = !self.cart.volunteer;
-                }
+                self.cart.volunteer = !self.cart.volunteer;
             }
             (State::CheckoutConfirm, Event::Button(_)) => {
                 self.go(State::Shopping, now);
@@ -469,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_3d_print_is_paid_and_never_free() {
+    fn a_3d_print_can_be_volunteer_use() {
         let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
         let print = |m: &mut Machine, grams| m.handle(&be, Event::Button(Action::Print(PrintPick::Filament(9), grams)), Instant::now());
         print(&mut m, 0);
@@ -478,13 +462,13 @@ mod tests {
         assert_eq!((m.state, m.cart.prints.len()), (State::Shopping, 1));
         assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // 50 g × €0.10
         run(&mut m, &be, &["VOLUNTEER"]);
-        assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
+        assert!(m.cart.volunteer, "a volunteer's print is free, booked at €0");
         run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
-        assert_eq!(m.state, State::QrDisplay);
+        assert_eq!(m.state, State::VolunteerDone);
     }
 
     #[test]
-    fn machine_time_is_paid_and_never_free() {
+    fn machine_time_is_paid_with_the_minimum() {
         let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
         let time = |m: &mut Machine, minutes| m.handle(&be, Event::Button(Action::Time(Tool::Laser, minutes)), Instant::now());
         time(&mut m, 0);
@@ -492,10 +476,8 @@ mod tests {
         time(&mut m, 4);
         assert_eq!((m.state, m.cart.times.len()), (State::Shopping, 1));
         assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // 4 min, at least the €5 minimum
-        run(&mut m, &be, &["VOLUNTEER"]);
-        assert!(!m.cart.volunteer && m.message.as_ref().unwrap().error);
         run(&mut m, &be, &["CONFIRM", "CONFIRM"]);
-        assert_eq!(m.state, State::QrDisplay);
+        assert_eq!(m.state, State::QrDisplay, "without VOLUNTEER it is paid");
     }
 
     #[test]
