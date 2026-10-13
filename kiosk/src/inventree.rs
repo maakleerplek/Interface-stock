@@ -437,7 +437,8 @@ impl Shared {
     }
 
     /// Returns the sales order's reference.
-    fn sell_services(&self, prints: &[Print], times: &[ToolTime]) -> Result<String, String> {
+    /// `volunteer`: booked at €0, so the analytics count it as volunteer use, not money in.
+    fn sell_services(&self, prints: &[Print], times: &[ToolTime], volunteer: bool) -> Result<String, String> {
         const T: Duration = Duration::from_secs(10);
         let ok = |r: Result<(u16, Value), String>| match r {
             Ok((200 | 201, v)) => Ok(v),
@@ -449,11 +450,14 @@ impl Shared {
             .find(|c| c.get("name").and_then(Value::as_str) == Some(TILL_CUSTOMER))
             .and_then(|c| c.get("pk")?.as_i64())
             .ok_or("No till customer in InvenTree")?;
-        let order = ok(self.post("/api/order/so/", &json!({"customer": customer, "description": "Machine use via Interface-stock"}), T))?;
+        let order = ok(self.post("/api/order/so/", &json!({"customer": customer, "description": if volunteer { "Volunteer machine use via Interface-stock" } else { "Machine use via Interface-stock" }}), T))?;
         let pk = order.get("pk").and_then(Value::as_i64).ok_or("No sales order created")?;
         let reference = order.get("reference").and_then(Value::as_str).unwrap_or_default().to_string();
         let book = || -> Result<(), String> {
-            for line in prints.iter().map(|p| print_line(pk, p)).chain(times.iter().map(|t| time_line(pk, t))) {
+            for mut line in prints.iter().map(|p| print_line(pk, p)).chain(times.iter().map(|t| time_line(pk, t))) {
+                if volunteer {
+                    line["price"] = json!("0.0000");
+                }
                 ok(self.post("/api/order/so-extra-line/", &line, T))?;
             }
             ok(self.post(&format!("/api/order/so/{pk}/issue/"), &json!({}), T))?;
@@ -786,7 +790,7 @@ impl Backend for InvenTree {
         // Prints first: the stock is verified above, so the removal below rarely
         // fails, and a failed print booking leaves the stock untouched.
         if cart.always_paid() {
-            let order = sh.sell_services(&cart.prints, &cart.times)?;
+            let order = sh.sell_services(&cart.prints, &cart.times, cart.volunteer)?;
             // The sale stands; a session the laser service could not take now is retried by poll_laser.
             for (id, _) in cart.times.iter().filter_map(|t| t.session.as_ref()) {
                 if !sh.mark_laser_paid(id, &order) {
@@ -803,11 +807,12 @@ impl Backend for InvenTree {
                 Err(e) => return Err(e),
             }
         }
+        let (action, paid) = if cart.volunteer { ("volunteer", false) } else { ("checkout", true) };
         for p in &cart.prints {
-            sh.changelog("checkout", &format!("3D print · {} g {}", p.grams, p.material), 1, Some(p.price()));
+            sh.changelog(action, &format!("3D print · {} g {}", p.grams, p.material), 1, paid.then(|| p.price()));
         }
         for t in &cart.times {
-            sh.changelog("checkout", &format!("{} · {} min", t.tool.label(), t.minutes), 1, Some(t.price()));
+            sh.changelog(action, &format!("{} · {} min", t.tool.label(), t.minutes), 1, paid.then(|| t.price()));
         }
         for (part, qty) in &cart.items {
             if cart.volunteer {

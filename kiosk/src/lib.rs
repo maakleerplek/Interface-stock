@@ -284,7 +284,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
         },
         cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
-            "{done_units} drink{} · {}",
+            "{done_units} item{} · {}",
             if done_units == 1 { "" } else { "s" },
             format_price(done_total)
         ),
