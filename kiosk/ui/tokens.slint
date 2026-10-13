@@ -49,6 +49,23 @@ export struct CartRow {
     qty: int,
     price: string,
     deep: color,
+    /// A 3D print or machine job: it leaves the cart as a whole, so no +.
+    whole: bool,
+}
+
+/// A machine paid per minute: id for the "time:<id>" action, price per minute, minimum per job.
+export struct ToolRate {
+    id: string,
+    name: string,
+    per-minute: float,
+    minimum: float,
+}
+
+/// An open laser timer session to pay at the kiosk.
+export struct LaserSessionRow {
+    name: string,
+    minutes: int,
+    price: string,
 }
 
 export struct ProductTile {

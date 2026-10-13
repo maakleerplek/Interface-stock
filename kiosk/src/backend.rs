@@ -1,4 +1,4 @@
-use crate::cart::{Cart, Part};
+use crate::cart::{Cart, Part, Tool};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,6 +18,14 @@ pub struct CatalogItem {
     pub image: Option<PathBuf>,
 }
 
+/// An open session on the laser timer (the stock app's laser service), with time on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LaserSession {
+    pub id: String,
+    pub name: String,
+    pub minutes: u32,
+}
+
 /// Everything the state machine needs from the outside world. The real
 /// implementation talks to InvenTree; `Demo` runs on a PC without a server.
 pub trait Backend: Send {
@@ -33,12 +41,20 @@ pub trait Backend: Send {
     fn category(&self, part: &Part) -> String;
     /// 3D-print price per gram of a filament.
     fn print_price(&self, part: &Part) -> f64;
+    /// Price per minute and the minimum per job of a machine.
+    fn tool_rate(&self, tool: Tool) -> (f64, f64);
+    /// Laser timer sessions that can be paid here: time on them, not in a checkout yet.
+    fn laser_sessions(&self) -> Vec<LaserSession> {
+        vec![]
+    }
     /// Remove the cart from stock. Err holds the message for the screen.
     fn checkout(&self, cart: &Cart) -> Result<(), String>;
 }
 
 /// 3D-print price per gram when a filament has none set in InvenTree.
 pub const DEFAULT_PRINT_PRICE: f64 = 0.10;
+/// Machine price per minute when InvenTree has none (the stock app's default too).
+pub const DEFAULT_TOOL_PRICE: f64 = 0.50;
 
 /// (barcode, pk, name, price, category, stock)
 type DemoRow = (&'static str, i64, &'static str, f64, &'static str, f64);
@@ -171,6 +187,14 @@ impl Backend for Demo {
 
     fn print_price(&self, _part: &Part) -> f64 {
         DEFAULT_PRINT_PRICE
+    }
+
+    fn tool_rate(&self, _tool: Tool) -> (f64, f64) {
+        (DEFAULT_TOOL_PRICE, 5.0)
+    }
+
+    fn laser_sessions(&self) -> Vec<LaserSession> {
+        vec![LaserSession { id: "demo".into(), name: "Ruben".into(), minutes: 12 }]
     }
 
     fn checkout(&self, cart: &Cart) -> Result<(), String> {

@@ -2,7 +2,7 @@
 //! the grid must be redrawn when it arrives, not only after a tap.
 
 use interface_stock::backend::{Backend, CatalogItem, StockLookupError};
-use interface_stock::cart::{Cart, Part};
+use interface_stock::cart::{Cart, Part, Tool};
 use interface_stock::{Config, Kiosk};
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +29,9 @@ impl Backend for Slow {
     }
     fn print_price(&self, _: &Part) -> f64 {
         0.1
+    }
+    fn tool_rate(&self, _: Tool) -> (f64, f64) {
+        (0.5, 5.0)
     }
     fn checkout(&self, _: &Cart) -> Result<(), String> {
         Ok(())

@@ -42,11 +42,76 @@ impl Print {
     }
 }
 
+/// A machine paid per minute at the till.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Laser,
+    Cnc,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 2] = [Tool::Laser, Tool::Cnc];
+
+    /// Its name in touch actions: "time:laser".
+    pub fn id(self) -> &'static str {
+        match self {
+            Tool::Laser => "laser",
+            Tool::Cnc => "cnc",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Laser => "Lasercut",
+            Tool::Cnc => "CNC",
+        }
+    }
+
+    /// Sales-order line reference, the same as the stock app books: the analytics group on it.
+    pub fn reference(self) -> &'static str {
+        match self {
+            Tool::Laser => "Lasertime",
+            Tool::Cnc => "CNC time",
+        }
+    }
+
+    /// Its virtual part in InvenTree's machine category, which also holds the TV's price list.
+    pub fn part_name(self) -> &'static str {
+        match self {
+            Tool::Laser => "Lasercutter",
+            Tool::Cnc => "CNC",
+        }
+    }
+}
+
+/// Machine time paid at the till: minutes at a price per minute, at least the minimum per job.
+#[derive(Clone, Debug)]
+pub struct ToolTime {
+    pub tool: Tool,
+    pub minutes: u32,
+    pub per_minute: f64,
+    pub minimum: f64,
+    /// The laser timer's session this time comes from: (id, name). Marked paid after the sale.
+    pub session: Option<(String, String)>,
+}
+
+impl ToolTime {
+    pub fn price(&self) -> f64 {
+        (self.minutes as f64 * self.per_minute).max(self.minimum)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Cart {
     pub items: Vec<(Part, u32)>,
     /// Shown after `items` in the cart; a cart row index past `items` is a print.
     pub prints: Vec<Print>,
+    /// Machine time, shown after the prints.
+    pub times: Vec<ToolTime>,
     /// The whole cart is a free volunteer drink.
     pub volunteer: bool,
 }
@@ -69,46 +134,61 @@ impl Cart {
     }
 
     /// Take one unit off the line at `index`; drops the line at zero. A print
-    /// row (past the items) goes as a whole.
-    pub fn remove_one(&mut self, index: usize) -> Option<Part> {
+    /// or machine-time row (past the items) goes as a whole. Returns what left.
+    pub fn remove_one(&mut self, index: usize) -> Option<String> {
         if let Some(i) = index.checked_sub(self.items.len()) {
-            return (i < self.prints.len()).then(|| self.prints.remove(i).part);
+            if i < self.prints.len() {
+                return Some(self.prints.remove(i).part.name);
+            }
+            let i = i - self.prints.len();
+            return (i < self.times.len()).then(|| self.times.remove(i).tool.label().to_string());
         }
         let (part, qty) = self.items.get_mut(index)?;
-        let part = part.clone();
+        let name = part.name.clone();
         if *qty > 1 {
             *qty -= 1;
         } else {
             self.items.remove(index);
         }
-        Some(part)
+        Some(name)
     }
 
-    /// The last row of the cart: a print if there is one, else one unit of the last item.
-    pub fn remove_last(&mut self) -> Option<Part> {
+    /// The last row of the cart: machine time, else a print, else one unit of the last item.
+    pub fn remove_last(&mut self) -> Option<String> {
+        if let Some(t) = self.times.pop() {
+            return Some(t.tool.label().into());
+        }
         if let Some(p) = self.prints.pop() {
-            return Some(p.part);
+            return Some(p.part.name);
         }
         self.remove_one(self.items.len().checked_sub(1)?)
     }
 
-    /// Item units plus one per print.
+    /// Item units plus one per print and per machine job.
     pub fn units(&self) -> u32 {
-        self.items.iter().map(|(_, q)| q).sum::<u32>() + self.prints.len() as u32
+        self.items.iter().map(|(_, q)| q).sum::<u32>() + (self.prints.len() + self.times.len()) as u32
     }
 
     pub fn total(&self, price: impl Fn(&Part) -> f64) -> f64 {
-        self.items.iter().map(|(p, q)| price(p) * *q as f64).sum::<f64>() + self.prints.iter().map(Print::price).sum::<f64>()
+        self.items.iter().map(|(p, q)| price(p) * *q as f64).sum::<f64>()
+            + self.prints.iter().map(Print::price).sum::<f64>()
+            + self.times.iter().map(ToolTime::price).sum::<f64>()
     }
 
     pub fn clear(&mut self) {
         self.items.clear();
         self.prints.clear();
+        self.times.clear();
         self.volunteer = false;
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty() && self.prints.is_empty()
+        self.items.is_empty() && !self.always_paid()
+    }
+
+    /// 3D prints and machine time are never a free volunteer drink.
+    pub fn always_paid(&self) -> bool {
+        !self.prints.is_empty() || !self.times.is_empty()
     }
 }
 
@@ -137,9 +217,32 @@ mod tests {
         c.prints.push(Print { part: part(9), grams: 50, per_gram: 0.12 });
         assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2.00 + 50 g × 0.12
         assert_eq!(c.units(), 2);
-        assert_eq!(c.remove_one(1).map(|p| p.pk), Some(9));   // row 1 is the print
+        assert_eq!(c.remove_one(1).as_deref(), Some("P9"));   // row 1 is the print
         assert!(c.prints.is_empty());
         assert!(c.remove_one(5).is_none());
+    }
+
+    #[test]
+    fn machine_time_costs_at_least_the_minimum() {
+        let job = |minutes| ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, session: None };
+        assert!((job(4).price() - 5.0).abs() < 1e-9);    // 4 min × €0.50 = €2, minimum €5
+        assert!((job(25).price() - 12.5).abs() < 1e-9);
+        let mut c = Cart::default();
+        c.add(part(1));
+        c.prints.push(Print { part: part(9), grams: 10, per_gram: 0.1 });
+        c.times.push(job(4));
+        assert_eq!(c.units(), 3);
+        assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2 + 1 + 5
+        assert_eq!(c.remove_one(2).as_deref(), Some("Lasercut"));   // row 2 is the job
+        assert!(c.times.is_empty() && c.always_paid());
+    }
+
+    #[test]
+    fn tool_ids_round_trip() {
+        for t in Tool::ALL {
+            assert_eq!(Tool::from_id(t.id()), Some(t));
+        }
+        assert_eq!(Tool::from_id("drill"), None);
     }
 
     #[test]

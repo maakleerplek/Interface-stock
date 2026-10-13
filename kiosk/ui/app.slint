@@ -3,8 +3,37 @@
 // category colour, every dialog is an agenda entry with a coloured left
 // column. No black surfaces; the main action is workshop blue.
 
-import { Mk, Screen, Category, CartRow, ProductTile, Press } from "tokens.slint";
-export { Screen, Category, CartRow, ProductTile }
+import { Mk, Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow, Press } from "tokens.slint";
+export { Screen, Category, CartRow, ProductTile, ToolRate, LaserSessionRow }
+
+// Number pad of the grams and minutes screens.
+component Keypad inherits Rectangle {
+    in-out property <int> value;
+    in property <int> max: 9999;
+    GridLayout {
+        spacing: 8px;
+        Row {
+            Press { text: "7"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 7, root.max); } }
+            Press { text: "8"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 8, root.max); } }
+            Press { text: "9"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 9, root.max); } }
+        }
+        Row {
+            Press { text: "4"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 4, root.max); } }
+            Press { text: "5"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 5, root.max); } }
+            Press { text: "6"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 6, root.max); } }
+        }
+        Row {
+            Press { text: "1"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 1, root.max); } }
+            Press { text: "2"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 2, root.max); } }
+            Press { text: "3"; radius: 0px; clicked => { root.value = Math.min(root.value * 10 + 3, root.max); } }
+        }
+        Row {
+            Press { text: "C"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Clear"; clicked => { root.value = 0; } }
+            Press { text: "0"; radius: 0px; clicked => { root.value = Math.min(root.value * 10, root.max); } }
+            Press { text: "⌫"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Delete digit"; clicked => { root.value = floor(root.value / 10); } }
+        }
+    }
+}
 
 component Card inherits Rectangle {
     in property <ProductTile> item;
@@ -157,7 +186,8 @@ component Entries inherits Rectangle {
                     accessible-label: "minus " + row.name;
                     clicked => { root.dec(i); }
                 }
-                if root.editable: Press {
+                if root.editable && row.whole: Rectangle { width: 58px; }
+                if root.editable && !row.whole: Press {
                     text: "+";
                     width: 58px;
                     min-height: 58px;
@@ -255,6 +285,17 @@ export component AppWindow inherits Window {
     in-out property <string> print-name;
     in-out property <string> print-per-gram;
     in-out property <int> print-grams: 0;
+    // Machine time: the machines (price per minute, minimum), and the minutes screen's state.
+    in property <[ToolRate]> tools;
+    // Open laser timer sessions, paid with one tap on the LASERCUT screen.
+    in property <[LaserSessionRow]> laser-sessions;
+    in-out property <bool> time-open: false;
+    in-out property <string> time-id;
+    in-out property <string> time-name;
+    in-out property <float> time-per-minute;
+    in-out property <float> time-minimum;
+    in-out property <int> time-minutes: 0;
+    property <float> time-price: root.time-minutes > 0 ? Math.max(root.time-minutes * root.time-per-minute, root.time-minimum) : 0;
 
     callback action(string, int);
     callback pick(int);
@@ -333,7 +374,8 @@ export component AppWindow inherits Window {
         height: root.height - 72px;
 
         // --- shop: bands | cards | cart ------------------------------------
-        if root.screen == Screen.shop: HorizontalLayout {
+        // Gone while the 3D-print or minutes screen covers it: no hidden buttons under them.
+        if root.screen == Screen.shop && !root.print-open && !root.time-open: HorizontalLayout {
             VerticalLayout {
                 width: 200px;
                 for c in root.categories: Rectangle {
@@ -389,6 +431,34 @@ export component AppWindow inherits Window {
                             root.print-pk = -1;
                             root.print-grams = 0;
                             root.print-open = true;
+                        }
+                    }
+                }
+                for t in root.tools: Rectangle {
+                    accessible-role: button;
+                    accessible-label: t.name;
+                    min-height: 72px;
+                    max-height: 132px;
+                    vertical-stretch: 1;
+                    property <color> deep: t.id == "laser" ? #A8401A : #34505E;
+                    background: tool-touch.pressed ? self.deep.darker(15%) : self.deep;
+                    Rectangle { y: 0; height: 1px; background: #ffffff33; }
+                    Text {
+                        x: 30px;
+                        y: parent.height - self.height - 16px;
+                        text: t.name;
+                        color: Mk.wit;
+                        font-size: 22px;
+                        font-weight: 800;
+                    }
+                    tool-touch := TouchArea {
+                        clicked => {
+                            root.time-id = t.id;
+                            root.time-name = t.name;
+                            root.time-per-minute = t.per-minute;
+                            root.time-minimum = t.minimum;
+                            root.time-minutes = 0;
+                            root.time-open = true;
                         }
                     }
                 }
@@ -576,29 +646,7 @@ export component AppWindow inherits Window {
                             font-weight: 800;
                         }
                     }
-                    GridLayout {
-                        spacing: 8px;
-                        Row {
-                            Press { text: "7"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 7, 9999); } }
-                            Press { text: "8"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 8, 9999); } }
-                            Press { text: "9"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 9, 9999); } }
-                        }
-                        Row {
-                            Press { text: "4"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 4, 9999); } }
-                            Press { text: "5"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 5, 9999); } }
-                            Press { text: "6"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 6, 9999); } }
-                        }
-                        Row {
-                            Press { text: "1"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 1, 9999); } }
-                            Press { text: "2"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 2, 9999); } }
-                            Press { text: "3"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10 + 3, 9999); } }
-                        }
-                        Row {
-                            Press { text: "C"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Clear"; clicked => { root.print-grams = 0; } }
-                            Press { text: "0"; radius: 0px; clicked => { root.print-grams = Math.min(root.print-grams * 10, 9999); } }
-                            Press { text: "⌫"; radius: 0px; fill: Mk.wit; ink: Mk.inkt; outline: Mk.lijn; accessible-label: "Delete digit"; clicked => { root.print-grams = floor(root.print-grams / 10); } }
-                        }
-                    }
+                    Keypad { value <=> root.print-grams; }
                     Text {
                         text: root.print-pk < 0 ? "Pick a filament first." : root.print-name + " · " + root.print-per-gram;
                         color: Mk.grafiet;
@@ -609,7 +657,7 @@ export component AppWindow inherits Window {
                         text: "ADD TO CART";
                         radius: 0px;
                         enabled: root.print-pk >= 0 && root.print-grams > 0;
-                        fill: Mk.workshop;
+                        fill: Mk.workshop-diep;
                         clicked => {
                             root.action("print:" + root.print-pk, root.print-grams);
                             root.print-open = false;
@@ -622,6 +670,93 @@ export component AppWindow inherits Window {
                         ink: Mk.inkt;
                         outline: Mk.lijn;
                         clicked => { root.print-open = false; }
+                    }
+                }
+            }
+        }
+
+        // --- machine time: type the minutes, add to the cart ----------------
+        if root.screen == Screen.shop && root.time-open: Rectangle {
+            background: Mk.beton;
+            TouchArea { }   // nothing behind it reacts while it is open
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 16px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+                    Text { text: root.time-name + " · HOW MANY MINUTES?"; color: Mk.inkt; font-size: 28px; font-weight: 800; wrap: word-wrap; }
+                    Text {
+                        text: root.time-id == "laser" ? "The minutes the laser ran for your job: the time on the laser timer." : "The minutes the CNC ran for your job.";
+                        color: Mk.grafiet;
+                        font-size: 18px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "€" + root.time-per-minute.to-fixed(2) + " per minute" + (root.time-minimum > 0 ? " · minimum €" + root.time-minimum.to-fixed(2) + " per job" : "");
+                        color: Mk.inkt;
+                        font-size: 20px;
+                        wrap: word-wrap;
+                    }
+                    if root.time-id == "laser" && root.laser-sessions.length > 0: Text {
+                        text: "YOUR SESSION ON THE LASER TIMER? TAP IT TO PAY:";
+                        color: Mk.inkt;
+                        font-size: 16px;
+                        font-weight: 800;
+                    }
+                    if root.time-id == "laser": Flickable {
+                        height: root.laser-sessions.length > 0 ? min(3, root.laser-sessions.length) * 72px : 0;
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            for s[i] in root.laser-sessions: Press {
+                                text: s.name + "  ·  " + s.minutes + " min  ·  " + s.price;
+                                min-height: 64px;
+                                radius: 0px;
+                                font-size: 20px;
+                                fill: #A8401A;
+                                clicked => {
+                                    root.action("session:" + i, 0);
+                                    root.time-open = false;
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Text { text: "TO PAY"; color: Mk.grafiet; font-size: 16px; font-weight: 800; }
+                    Text { text: "€" + root.time-price.to-fixed(2); color: Mk.inkt; font-size: 56px; font-weight: 800; }
+                    Text {
+                        text: root.time-minutes > 0 && root.time-minutes * root.time-per-minute < root.time-minimum ? "Under the minimum: you pay the minimum per job." : " ";
+                        color: Mk.grafiet;
+                        font-size: 16px;
+                    }
+                }
+                VerticalLayout {
+                    width: 380px;
+                    spacing: 8px;
+                    Rectangle {
+                        height: 72px;
+                        background: Mk.wit;
+                        Text { text: root.time-minutes + " min"; color: Mk.inkt; font-size: 40px; font-weight: 800; }
+                    }
+                    Keypad { value <=> root.time-minutes; max: 999; }
+                    Press {
+                        text: "ADD TO CART";
+                        radius: 0px;
+                        enabled: root.time-minutes > 0;
+                        fill: Mk.workshop-diep;
+                        clicked => {
+                            root.action("time:" + root.time-id, root.time-minutes);
+                            root.time-open = false;
+                        }
+                    }
+                    Press {
+                        text: "CANCEL";
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.lijn;
+                        clicked => { root.time-open = false; }
                     }
                 }
             }
