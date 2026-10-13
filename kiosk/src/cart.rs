@@ -28,12 +28,33 @@ impl Part {
     }
 }
 
-/// A 3D print paid at the till: the filament, the grams and its price per gram.
+/// A 3D print paid at the till. `material` is booked as the line's description, for the
+/// analytics per filament: the filament ("PLA White (1 kg)"), only its type ("PLA"), or "".
 #[derive(Clone, Debug)]
 pub struct Print {
-    pub part: Part,
+    pub material: String,
     pub grams: u32,
     pub per_gram: f64,
+}
+
+/// Type and colour from a filament's InvenTree name, "[Refill] TYPE [hardness] Colour (weight)":
+/// "Refill PLA Grey Beige (750 g)" is ("PLA", "Grey Beige (refill)"), "rTPU 95A Traffic White (1 kg)"
+/// is ("rTPU 95A", "Traffic White"). A new spool or material shows up by itself.
+pub fn filament_type(name: &str) -> (String, String) {
+    let bare = name.split(" (").next().unwrap_or(name);
+    let mut words: Vec<&str> = bare.split_whitespace().collect();
+    let refill = words.first().is_some_and(|w| w.eq_ignore_ascii_case("refill"));
+    if refill {
+        words.remove(0);
+    }
+    let mut kind = words.first().map(|w| w.to_string()).unwrap_or_default();
+    let mut rest = words.get(1..).unwrap_or_default().to_vec();
+    // TPU hardness ("90A") is part of the type: 90A and 95A print differently.
+    if rest.first().is_some_and(|w| w.len() > 1 && w.ends_with(['A', 'a']) && w[..w.len() - 1].chars().all(|c| c.is_ascii_digit())) {
+        kind = format!("{kind} {}", rest.remove(0));
+    }
+    let colour = rest.join(" ");
+    (kind, if refill { format!("{colour} (refill)") } else { colour })
 }
 
 impl Print {
@@ -105,6 +126,10 @@ impl ToolTime {
     }
 }
 
+fn print_name(p: &Print) -> String {
+    if p.material.is_empty() { "3D print".into() } else { p.material.clone() }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Cart {
     pub items: Vec<(Part, u32)>,
@@ -138,7 +163,7 @@ impl Cart {
     pub fn remove_one(&mut self, index: usize) -> Option<String> {
         if let Some(i) = index.checked_sub(self.items.len()) {
             if i < self.prints.len() {
-                return Some(self.prints.remove(i).part.name);
+                return Some(print_name(&self.prints.remove(i)));
             }
             let i = i - self.prints.len();
             return (i < self.times.len()).then(|| self.times.remove(i).tool.label().to_string());
@@ -159,7 +184,7 @@ impl Cart {
             return Some(t.tool.label().into());
         }
         if let Some(p) = self.prints.pop() {
-            return Some(p.part.name);
+            return Some(print_name(&p));
         }
         self.remove_one(self.items.len().checked_sub(1)?)
     }
@@ -214,7 +239,7 @@ mod tests {
     fn prints_add_to_the_total_and_are_removed_as_a_row() {
         let mut c = Cart::default();
         c.add(part(1));
-        c.prints.push(Print { part: part(9), grams: 50, per_gram: 0.12 });
+        c.prints.push(Print { material: "P9".into(), grams: 50, per_gram: 0.12 });
         assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2.00 + 50 g × 0.12
         assert_eq!(c.units(), 2);
         assert_eq!(c.remove_one(1).as_deref(), Some("P9"));   // row 1 is the print
@@ -229,12 +254,22 @@ mod tests {
         assert!((job(25).price() - 12.5).abs() < 1e-9);
         let mut c = Cart::default();
         c.add(part(1));
-        c.prints.push(Print { part: part(9), grams: 10, per_gram: 0.1 });
+        c.prints.push(Print { material: "P9".into(), grams: 10, per_gram: 0.1 });
         c.times.push(job(4));
         assert_eq!(c.units(), 3);
         assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2 + 1 + 5
         assert_eq!(c.remove_one(2).as_deref(), Some("Lasercut"));   // row 2 is the job
         assert!(c.times.is_empty() && c.always_paid());
+    }
+
+    #[test]
+    fn filament_type_and_colour_from_the_name() {
+        let t = |n: &str| filament_type(n);
+        assert_eq!(t("PLA Matt Black (1 kg)"), ("PLA".into(), "Matt Black".into()));
+        assert_eq!(t("Refill PLA Grey Beige (750 g)"), ("PLA".into(), "Grey Beige (refill)".into()));
+        assert_eq!(t("Refill PETG Zinc Yellow (750 g)"), ("PETG".into(), "Zinc Yellow (refill)".into()));
+        assert_eq!(t("rTPU 95A Traffic White (1 kg)"), ("rTPU 95A".into(), "Traffic White".into()));
+        assert_eq!(t("PLA White"), ("PLA".into(), "White".into()));
     }
 
     #[test]
