@@ -297,11 +297,13 @@ fn tap_through_every_screen() {
     r.tap("3D PRINT");
     r.shot("print-types");
     r.tap("PLA");
+    assert_eq!(r.ui.get_print_colours().row_count(), 1, "only PLA colours");
+    r.tap("Filament Dark Blue 1kg");
     r.shot("print-colours");
     r.tap("2");
     r.tap("0");
     r.tap("ADD TO CART");
-    assert_eq!(r.ui.get_rows().row_data(0).unwrap().name.as_str(), "3D print · PLA · 20 g");
+    assert_eq!(r.ui.get_rows().row_data(0).unwrap().name.as_str(), "3D print · PLA Filament Dark Blue 1kg · 20 g");
     r.tap("3D PRINT");
     r.tap("5");
     r.tap("ADD TO CART");
