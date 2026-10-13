@@ -7,7 +7,8 @@
       <action name="MoveToOutput" output="DSI-1" />
       <action name="ToggleFullscreen" />
     </windowRule>
-    <windowRule identifier="chromium*" serverDecoration="no">
+    <!-- chrom*: in --app mode Chromium on Wayland is "chrome-...", not "chromium". -->
+    <windowRule identifier="chrom*" serverDecoration="no">
       <action name="MoveToOutput" output="HDMI-A-1" />
     </windowRule>
   </windowRules>
