@@ -101,7 +101,10 @@ export component Press inherits Rectangle {
     min-height: 64px;
     min-width: 64px;
     border-radius: root.radius;
-    background: touch.pressed ? root.fill.darker(25%) : root.fill;
+    // flash: keeps the pressed shade ~¼ s after a quick tap, so the tap visibly registered.
+    property <bool> flash;
+    background: touch.pressed || root.flash ? root.fill.darker(25%) : root.fill;
+    animate background { duration: 120ms; }
     border-width: root.outline == transparent ? 0px : root.outline-w;
     border-color: root.outline;
     opacity: root.enabled ? 1 : 0.35;
@@ -120,6 +123,7 @@ export component Press inherits Rectangle {
 
     touch := TouchArea {
         enabled: root.enabled;
-        clicked => { root.clicked(); }
+        clicked => { root.flash = true; root.clicked(); }
     }
+    Timer { interval: 250ms; running: root.flash; triggered => { root.flash = false; } }
 }

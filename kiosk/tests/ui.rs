@@ -5,7 +5,7 @@
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use interface_stock::backend::Demo;
-use interface_stock::state::{Event, State};
+use interface_stock::state::{Event, State, CHECKOUT_LOCK};
 use interface_stock::{apply, wire, AppWindow, Config, Kiosk, Screen};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
@@ -252,14 +252,14 @@ fn tap_through_every_screen() {
     r.tap("← BACK");
     assert_eq!(r.ui.get_screen(), Screen::Shop);
     r.tap("CHECKOUT  →");
-    r.tap("VOLUNTEER");
-    assert!(!r.ui.get_volunteer(), "not before the pop-up is confirmed");
-    r.shot("volunteer-ask");
-    r.tap("YES, I'M A VOLUNTEER");
-    assert!(r.ui.get_volunteer());
-    r.shot("volunteer-oath");
-    r.tap("✓ VOLUNTEER");
-    assert!(!r.ui.get_volunteer());
+    r.tap("CONFIRM & PAY →");
+    // The checkout check unlocks CONFIRM after a countdown, one step per
+    // second: a slint Timer fires at most once per update.
+    assert_eq!(r.ui.get_screen(), Screen::CheckoutConfirm, "locked for the first seconds");
+    for _ in 0..CHECKOUT_LOCK.as_secs() {
+        std::thread::sleep(std::time::Duration::from_millis(1050));
+        slint::platform::update_timers_and_animations();
+    }
     r.tap("CONFIRM & PAY →");
     assert_eq!(r.ui.get_screen(), Screen::Qr);
     r.shot("payment-qr");
@@ -277,6 +277,7 @@ fn tap_through_every_screen() {
     // Volunteer drink start to finish.
     r.tap("Coca-Cola 33cl");
     r.tap("VOLUNTEER DRINK");
+    assert!(!r.ui.get_volunteer(), "not before the pop-up is confirmed");
     r.tap("Back, I am not a volunteer");
     assert!(!r.ui.get_volunteer(), "BACK leaves it off");
     r.tap("VOLUNTEER DRINK");
@@ -284,6 +285,14 @@ fn tap_through_every_screen() {
     assert!(r.ui.get_volunteer());
     r.shot("volunteer-on");
     r.tap("CHECKOUT  →");
+    r.shot("volunteer-oath");   // also draws the screen, which starts its countdown
+    // The checkout check unlocks CONFIRM after a countdown, one step per
+    // second: a slint Timer fires at most once per update.
+    assert_eq!(r.ui.get_screen(), Screen::CheckoutConfirm, "locked for the first seconds");
+    for _ in 0..CHECKOUT_LOCK.as_secs() {
+        std::thread::sleep(std::time::Duration::from_millis(1050));
+        slint::platform::update_timers_and_animations();
+    }
     r.tap("I SWEAR IT");
     assert_eq!(r.ui.get_screen(), Screen::VolunteerDone);
     r.shot("volunteer-done");
