@@ -862,7 +862,11 @@ export component AppWindow inherits Window {
         }
 
         // --- checkout / oath -------------------------------------------------
+        // CONFIRM unlocks after a countdown (state.rs CHECKOUT_LOCK, enforced there too),
+        // so CHECKOUT + CONFIRM can't be tapped through without looking.
         if root.screen == Screen.checkout-confirm: Entry {
+            property <int> left: 3;
+            Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
             kicker: root.volunteer ? "VOLUNTEER" : "STEP 1 OF 2";
             title: root.volunteer ? "The oath" : "Check your cart";
             light: root.volunteer ? Mk.openlab : Mk.herstel;
@@ -917,18 +921,9 @@ export component AppWindow inherits Window {
                         clicked => { root.action("back", 0); }
                     }
                     Press {
-                        text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
-                        width: 190px;
-                        min-height: 88px;
-                        radius: 0px;
-                        fill: Mk.openlab;
-                        ink: Mk.openlab-diep;
-                        font-size: 20px;
-                        weight: 800;
-                        clicked => { if (root.volunteer) { root.action("volunteer", 0); } else { root.volunteer-ask = true; } }
-                    }
-                    Press {
-                        text: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
+                        text: (root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →") + (left > 0 ? " (" + left + ")" : "");
+                        accessible-label: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
+                        enabled: left == 0;
                         min-height: 88px;
                         radius: 0px;
                         fill: root.volunteer ? Mk.openlab-diep : Mk.workshop-diep;
@@ -948,8 +943,7 @@ export component AppWindow inherits Window {
         }
 
         // --- payment QR ------------------------------------------------------
-        // The QR stays visible behind the "did you pay?" pop-up.
-        if root.screen == Screen.qr || root.screen == Screen.pay-confirm: Entry {
+        if root.screen == Screen.qr: Entry {
             kicker: "STEP 2 OF 2";
             title: "Pay " + root.total;
             light: Mk.workshop;
@@ -985,6 +979,49 @@ export component AppWindow inherits Window {
                         radius: 0px;
                         fill: Mk.workshop-diep;
                         font-size: 30px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
+            }
+        }
+
+        // --- did you pay? ----------------------------------------------------
+        if root.screen == Screen.pay-confirm: Entry {
+            kicker: "LAST CHECK";
+            title: "Did you pay " + root.total + "?";
+            light: Mk.herstel;
+            deep: Mk.herstel-diep;
+            VerticalLayout {
+                padding: 48px;
+                spacing: 24px;
+                Text {
+                    vertical-stretch: 1;
+                    text: "Only tap YES once your banking app says the payment went through.";
+                    color: Mk.inkt;
+                    font-size: 28px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Press {
+                        text: "← NOT YET";
+                        min-height: 110px;
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.grafiet;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("back", 0); }
+                    }
+                    Press {
+                        text: "YES, I PAID";
+                        min-height: 110px;
+                        radius: 0px;
+                        fill: Mk.openlab-diep;
+                        font-size: 24px;
                         weight: 800;
                         clicked => { root.action("confirm", 0); }
                     }
@@ -1028,61 +1065,6 @@ export component AppWindow inherits Window {
                 font-size: 56px;
                 font-weight: 700;
                 horizontal-alignment: center;
-            }
-        }
-    }
-
-    // --- did you pay? -------------------------------------------------------
-    // YES unlocks after a countdown (state.rs PAY_CONFIRM_LOCK, enforced there too),
-    // so a double tap on DONE can't book the payment.
-    if root.screen == Screen.pay-confirm: Rectangle {
-        property <int> left: 3;
-        background: #000000aa;
-        TouchArea { }   // nothing behind it reacts while it is open
-        Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
-        Rectangle {
-            width: 760px;
-            height: 440px;
-            background: Mk.wit;
-            border-width: 4px;
-            border-color: Mk.herstel-diep;
-            VerticalLayout {
-                padding: 36px;
-                spacing: 18px;
-                Text { text: "LAST CHECK"; color: Mk.herstel-diep; font-size: 20px; font-weight: 800; }
-                Text { text: "Did you pay " + root.total + "?"; color: Mk.inkt; font-family: Mk.serif; font-size: 40px; font-weight: 700; wrap: word-wrap; }
-                Text {
-                    text: "Only tap YES once your banking app says the payment went through.";
-                    color: Mk.inkt;
-                    font-size: 22px;
-                    wrap: word-wrap;
-                    vertical-stretch: 1;
-                }
-                HorizontalLayout {
-                    spacing: 16px;
-                    Press {
-                        text: "← NOT YET";
-                        min-height: 100px;
-                        radius: 0px;
-                        fill: Mk.wit;
-                        ink: Mk.inkt;
-                        outline: Mk.grafiet;
-                        font-size: 24px;
-                        weight: 800;
-                        clicked => { root.action("back", 0); }
-                    }
-                    Press {
-                        text: left > 0 ? "YES, I PAID (" + left + ")" : "YES, I PAID";
-                        accessible-label: "YES, I PAID";
-                        enabled: left == 0;
-                        min-height: 100px;
-                        radius: 0px;
-                        fill: Mk.openlab-diep;
-                        font-size: 24px;
-                        weight: 800;
-                        clicked => { root.action("confirm", 0); }
-                    }
-                }
             }
         }
     }

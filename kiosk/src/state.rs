@@ -12,8 +12,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(300);
 pub const VOLUNTEER_DONE_FOR: Duration = Duration::from_secs(4);
 /// An unanswered "Did you pay?" goes back to the QR after this long.
 pub const PAY_CONFIRM_FOR: Duration = Duration::from_secs(30);
-/// "YES, I PAID" is ignored this long after the question appears: no paying by double tap.
-pub const PAY_CONFIRM_LOCK: Duration = Duration::from_secs(3);
+/// CONFIRM on the checkout check is ignored this long after it opens: look at the cart first.
+pub const CHECKOUT_LOCK: Duration = Duration::from_secs(3);
 /// Banner messages disappear after this long.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(6);
 
@@ -318,9 +318,7 @@ impl Machine {
                 self.error("Please finish payment first, then tap DONE.")
             }
 
-            (State::PayConfirm, Event::Button(Confirm))
-                if now - self.entered >= PAY_CONFIRM_LOCK =>
-            {
+            (State::PayConfirm, Event::Button(Confirm)) => {
                 self.reset(now);
                 self.info("Thank you!");
             }
@@ -369,11 +367,15 @@ impl Machine {
                 }
             }
 
-            (State::CheckoutConfirm, Event::Button(Confirm)) => self.go(State::Processing, now),
+            (State::CheckoutConfirm, Event::Button(Confirm)) => {
+                if now - self.entered >= CHECKOUT_LOCK {
+                    self.go(State::Processing, now)
+                }
+            }
             (State::CheckoutConfirm, Event::Button(Cancel)) => self.go(State::CancelConfirm, now),
+            // Volunteer mode is switched on the shop screen only, not at the checkout check.
             (State::CheckoutConfirm, Event::Button(Volunteer)) => {
-                // Stay: the confirm screen redraws with the new header and total.
-                self.cart.volunteer = !self.cart.volunteer;
+                self.info("Turn on VOLUNTEER in the shop, before CHECKOUT.")
             }
             (State::CheckoutConfirm, Event::Button(_)) => {
                 self.go(State::Shopping, now);
@@ -434,9 +436,15 @@ mod tests {
     use super::*;
     use crate::backend::Demo;
 
+    /// Past the checkout lock, or the checkout check would ignore CONFIRM.
+    fn when(m: &Machine) -> Instant {
+        let now = Instant::now();
+        if m.state == State::CheckoutConfirm { now.max(m.entered + CHECKOUT_LOCK) } else { now }
+    }
+
     fn run(m: &mut Machine, be: &Demo, events: &[&str]) {
         for e in events {
-            m.handle(be, Event::from_barcode(e), Instant::now());
+            m.handle(be, Event::from_barcode(e), when(m));
             m.checkout(be, Instant::now());
         }
     }
@@ -451,7 +459,7 @@ mod tests {
         assert_eq!(m.cart.units(), 2);
         run(&mut m, &be, &["CONFIRM"]);
         assert_eq!(m.state, State::PayConfirm);
-        m.handle(&be, Event::Button(Action::Confirm), Instant::now() + PAY_CONFIRM_LOCK);
+        run(&mut m, &be, &["CONFIRM"]);
         assert_eq!(m.state, State::Idle);
         assert!(m.cart.is_empty());
     }
@@ -597,7 +605,7 @@ mod tests {
     fn touch_only_flow() {
         let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
         let tap = |m: &mut Machine, e: Event| {
-            m.handle(&be, e, Instant::now());
+            m.handle(&be, e, when(m));
             m.checkout(&be, Instant::now());
         };
         tap(&mut m, Event::Pick(1));
@@ -618,7 +626,7 @@ mod tests {
         assert!(m.message.as_ref().unwrap().error);
         tap(&mut m, Event::Button(Action::Confirm));
         assert_eq!(m.state, State::PayConfirm);
-        m.handle(&be, Event::Button(Action::Confirm), Instant::now() + PAY_CONFIRM_LOCK);
+        tap(&mut m, Event::Button(Action::Confirm));
         assert_eq!(m.state, State::Idle);
         assert!(m.cart.is_empty());
     }
@@ -644,15 +652,23 @@ mod tests {
     }
 
     #[test]
-    fn pay_confirm_ignores_yes_during_lock() {
+    fn checkout_ignores_confirm_during_lock() {
         let be = Demo::new();
-        let mut m = at_qr(&be);
-        let t = Instant::now();
-        m.handle(&be, Event::Button(Action::Confirm), t);
+        let mut m = Machine::new(Instant::now());
+        run(&mut m, &be, &["COLA", "CONFIRM"]);
+        let t = m.entered;
         m.handle(&be, Event::Button(Action::Confirm), t + Duration::from_millis(200));
-        assert_eq!(m.state, State::PayConfirm, "double tap on DONE does not pay");
-        m.handle(&be, Event::Button(Action::Confirm), t + PAY_CONFIRM_LOCK);
-        assert_eq!(m.state, State::Idle);
+        assert_eq!(m.state, State::CheckoutConfirm, "a double tap on CHECKOUT does not go through");
+        m.handle(&be, Event::Button(Action::Confirm), t + CHECKOUT_LOCK);
+        assert_eq!(m.state, State::Processing);
+    }
+
+    #[test]
+    fn volunteer_cannot_be_switched_at_checkout() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        run(&mut m, &be, &["COLA", "CONFIRM", "VOLUNTEER"]);
+        assert_eq!(m.state, State::CheckoutConfirm);
+        assert!(!m.cart.volunteer);
     }
 
     #[test]
