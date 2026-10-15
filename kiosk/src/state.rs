@@ -12,6 +12,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(300);
 pub const VOLUNTEER_DONE_FOR: Duration = Duration::from_secs(4);
 /// An unanswered "Did you pay?" goes back to the QR after this long.
 pub const PAY_CONFIRM_FOR: Duration = Duration::from_secs(30);
+/// "YES, I PAID" is ignored this long after the question appears: no paying by double tap.
+pub const PAY_CONFIRM_LOCK: Duration = Duration::from_secs(3);
 /// Banner messages disappear after this long.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(6);
 
@@ -316,7 +318,9 @@ impl Machine {
                 self.error("Please finish payment first, then tap DONE.")
             }
 
-            (State::PayConfirm, Event::Button(Confirm)) => {
+            (State::PayConfirm, Event::Button(Confirm))
+                if now - self.entered >= PAY_CONFIRM_LOCK =>
+            {
                 self.reset(now);
                 self.info("Thank you!");
             }
@@ -447,7 +451,7 @@ mod tests {
         assert_eq!(m.cart.units(), 2);
         run(&mut m, &be, &["CONFIRM"]);
         assert_eq!(m.state, State::PayConfirm);
-        run(&mut m, &be, &["CONFIRM"]);
+        m.handle(&be, Event::Button(Action::Confirm), Instant::now() + PAY_CONFIRM_LOCK);
         assert_eq!(m.state, State::Idle);
         assert!(m.cart.is_empty());
     }
@@ -614,7 +618,7 @@ mod tests {
         assert!(m.message.as_ref().unwrap().error);
         tap(&mut m, Event::Button(Action::Confirm));
         assert_eq!(m.state, State::PayConfirm);
-        tap(&mut m, Event::Button(Action::Confirm));
+        m.handle(&be, Event::Button(Action::Confirm), Instant::now() + PAY_CONFIRM_LOCK);
         assert_eq!(m.state, State::Idle);
         assert!(m.cart.is_empty());
     }
@@ -637,6 +641,18 @@ mod tests {
         m.handle(&be, Event::Button(Action::Back), Instant::now());
         assert_eq!(m.state, State::QrDisplay);
         assert_eq!(m.cart.units(), 1);
+    }
+
+    #[test]
+    fn pay_confirm_ignores_yes_during_lock() {
+        let be = Demo::new();
+        let mut m = at_qr(&be);
+        let t = Instant::now();
+        m.handle(&be, Event::Button(Action::Confirm), t);
+        m.handle(&be, Event::Button(Action::Confirm), t + Duration::from_millis(200));
+        assert_eq!(m.state, State::PayConfirm, "double tap on DONE does not pay");
+        m.handle(&be, Event::Button(Action::Confirm), t + PAY_CONFIRM_LOCK);
+        assert_eq!(m.state, State::Idle);
     }
 
     #[test]

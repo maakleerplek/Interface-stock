@@ -43,9 +43,13 @@ component Card inherits Rectangle {
 
     accessible-role: button;
     accessible-label: root.item.name;
-    background: touch.pressed ? Mk.beton : Mk.wit;
-    border-width: root.selected ? 5px : 1px;
-    border-color: root.selected ? root.item.deep : Mk.lijn;
+    // flash: keeps the tap highlight ~¼ s after release, so a quick tap visibly registered.
+    property <bool> flash;
+    property <bool> hot: touch.pressed || root.flash;
+    background: root.hot ? root.item.light : Mk.wit;
+    animate background { duration: 120ms; }
+    border-width: root.selected || root.hot ? 5px : 1px;
+    border-color: root.selected || root.hot ? root.item.deep : Mk.lijn;
     opacity: root.item.sold-out ? 0.4 : 1;
     clip: true;
 
@@ -119,8 +123,9 @@ component Card inherits Rectangle {
 
     touch := TouchArea {
         enabled: !root.item.sold-out;
-        clicked => { root.picked(root.item.pk); }
+        clicked => { root.flash = true; root.picked(root.item.pk); }
     }
+    Timer { interval: 250ms; running: root.flash; triggered => { root.flash = false; } }
 }
 
 component Entries inherits Rectangle {
@@ -395,7 +400,7 @@ export component AppWindow inherits Window {
                     min-height: 72px;
                     max-height: 132px;
                     vertical-stretch: 1;
-                    background: band-touch.pressed ? c.light.darker(10%) : c.light;
+                    background: band-touch.pressed ? c.light.darker(25%) : c.light;
                     Rectangle {
                         x: 0;
                         width: c.name == root.category ? 16px : 0px;
@@ -428,7 +433,7 @@ export component AppWindow inherits Window {
                     min-height: 72px;
                     max-height: 132px;
                     vertical-stretch: 1;
-                    background: print-touch.pressed ? Mk.workshop-diep.darker(15%) : Mk.workshop-diep;
+                    background: print-touch.pressed ? Mk.workshop-diep.darker(25%) : Mk.workshop-diep;
                     Text {
                         x: 30px;
                         y: parent.height - self.height - 16px;
@@ -454,7 +459,7 @@ export component AppWindow inherits Window {
                     max-height: 132px;
                     vertical-stretch: 1;
                     property <color> deep: t.id == "laser" ? #A8401A : #34505E;
-                    background: tool-touch.pressed ? self.deep.darker(15%) : self.deep;
+                    background: tool-touch.pressed ? self.deep.darker(25%) : self.deep;
                     Rectangle { y: 0; height: 1px; background: #ffffff33; }
                     Text {
                         x: 30px;
@@ -943,7 +948,8 @@ export component AppWindow inherits Window {
         }
 
         // --- payment QR ------------------------------------------------------
-        if root.screen == Screen.qr: Entry {
+        // The QR stays visible behind the "did you pay?" pop-up.
+        if root.screen == Screen.qr || root.screen == Screen.pay-confirm: Entry {
             kicker: "STEP 2 OF 2";
             title: "Pay " + root.total;
             light: Mk.workshop;
@@ -979,49 +985,6 @@ export component AppWindow inherits Window {
                         radius: 0px;
                         fill: Mk.workshop-diep;
                         font-size: 30px;
-                        weight: 800;
-                        clicked => { root.action("confirm", 0); }
-                    }
-                }
-            }
-        }
-
-        // --- did you pay? ----------------------------------------------------
-        if root.screen == Screen.pay-confirm: Entry {
-            kicker: "LAST CHECK";
-            title: "Did you pay " + root.total + "?";
-            light: Mk.herstel;
-            deep: Mk.herstel-diep;
-            VerticalLayout {
-                padding: 48px;
-                spacing: 24px;
-                Text {
-                    vertical-stretch: 1;
-                    text: "Only tap YES once your banking app says the payment went through.";
-                    color: Mk.inkt;
-                    font-size: 28px;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                }
-                HorizontalLayout {
-                    spacing: 16px;
-                    Press {
-                        text: "← NOT YET";
-                        min-height: 110px;
-                        radius: 0px;
-                        fill: Mk.wit;
-                        ink: Mk.inkt;
-                        outline: Mk.grafiet;
-                        font-size: 24px;
-                        weight: 800;
-                        clicked => { root.action("back", 0); }
-                    }
-                    Press {
-                        text: "YES, I PAID";
-                        min-height: 110px;
-                        radius: 0px;
-                        fill: Mk.openlab-diep;
-                        font-size: 24px;
                         weight: 800;
                         clicked => { root.action("confirm", 0); }
                     }
@@ -1065,6 +1028,61 @@ export component AppWindow inherits Window {
                 font-size: 56px;
                 font-weight: 700;
                 horizontal-alignment: center;
+            }
+        }
+    }
+
+    // --- did you pay? -------------------------------------------------------
+    // YES unlocks after a countdown (state.rs PAY_CONFIRM_LOCK, enforced there too),
+    // so a double tap on DONE can't book the payment.
+    if root.screen == Screen.pay-confirm: Rectangle {
+        property <int> left: 3;
+        background: #000000aa;
+        TouchArea { }   // nothing behind it reacts while it is open
+        Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
+        Rectangle {
+            width: 760px;
+            height: 440px;
+            background: Mk.wit;
+            border-width: 4px;
+            border-color: Mk.herstel-diep;
+            VerticalLayout {
+                padding: 36px;
+                spacing: 18px;
+                Text { text: "LAST CHECK"; color: Mk.herstel-diep; font-size: 20px; font-weight: 800; }
+                Text { text: "Did you pay " + root.total + "?"; color: Mk.inkt; font-family: Mk.serif; font-size: 40px; font-weight: 700; wrap: word-wrap; }
+                Text {
+                    text: "Only tap YES once your banking app says the payment went through.";
+                    color: Mk.inkt;
+                    font-size: 22px;
+                    wrap: word-wrap;
+                    vertical-stretch: 1;
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Press {
+                        text: "← NOT YET";
+                        min-height: 100px;
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.grafiet;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("back", 0); }
+                    }
+                    Press {
+                        text: left > 0 ? "YES, I PAID (" + left + ")" : "YES, I PAID";
+                        accessible-label: "YES, I PAID";
+                        enabled: left == 0;
+                        min-height: 100px;
+                        radius: 0px;
+                        fill: Mk.openlab-diep;
+                        font-size: 24px;
+                        weight: 800;
+                        clicked => { root.action("confirm", 0); }
+                    }
+                }
             }
         }
     }

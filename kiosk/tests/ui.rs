@@ -5,7 +5,7 @@
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use interface_stock::backend::Demo;
-use interface_stock::state::{Event, State};
+use interface_stock::state::{Event, State, PAY_CONFIRM_LOCK};
 use interface_stock::{apply, wire, AppWindow, Config, Kiosk, Screen};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
@@ -269,6 +269,13 @@ fn tap_through_every_screen() {
     r.tap("← NOT YET");
     assert_eq!(r.ui.get_screen(), Screen::Qr);
     r.tap("DONE");
+    r.tap("YES, I PAID");
+    assert_eq!(r.ui.get_screen(), Screen::PayConfirm, "locked for the first seconds");
+    // One step per second: a slint Timer fires at most once per update.
+    for _ in 0..PAY_CONFIRM_LOCK.as_secs() {
+        std::thread::sleep(std::time::Duration::from_millis(1050));
+        slint::platform::update_timers_and_animations();
+    }
     r.tap("YES, I PAID");
     assert_eq!(r.ui.get_screen(), Screen::Shop);
     assert_eq!(r.units(), 0);
