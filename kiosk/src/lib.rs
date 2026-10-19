@@ -522,12 +522,15 @@ pub struct Kiosk {
     tv: Option<tv::Tv>,
     /// The catalog as last drawn; it loads (and reloads) in the background.
     catalog: Vec<backend::CatalogItem>,
+    /// The laser timer sessions as last drawn; polled in the background.
+    laser: Vec<backend::LaserSession>,
 }
 
 impl Kiosk {
     pub fn new(be: Box<dyn Backend>, cfg: Config) -> Self {
         let catalog = be.catalog();
-        Kiosk { m: Machine::new(Instant::now()), be, cfg, last_scan: None, tv: None, catalog }
+        let laser = be.laser_sessions();
+        Kiosk { m: Machine::new(Instant::now()), be, cfg, last_scan: None, tv: None, catalog, laser }
     }
 
     /// Tell the TV page when someone is shopping, and page it on request.
@@ -584,7 +587,11 @@ impl Kiosk {
         let catalog = self.be.catalog();
         let reloaded = catalog != self.catalog;
         self.catalog = catalog;
-        (changed || reloaded).then(|| self.view(""))
+        // Same for laser sessions: one paid or deleted elsewhere must leave the screen without a tap.
+        let laser = self.be.laser_sessions();
+        let laser_changed = laser != self.laser;
+        self.laser = laser;
+        (changed || reloaded || laser_changed).then(|| self.view(""))
     }
 }
 
