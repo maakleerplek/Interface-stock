@@ -78,7 +78,8 @@ fi
 
 # Mean brightness and spread of a tiny grayscale screenshot. The TV page has
 # a spread around 0.18; a white (or black) screen is close to 0.
-read -r mean sd < <(timeout 20 wl grim -o HDMI-A-1 -t ppm - 2>/dev/null \
+# timeout inside wl: timeout cannot run the shell function wl (it failed silently, so a white TV was never caught).
+read -r mean sd < <(wl timeout 20 grim -o HDMI-A-1 -t ppm - 2>/dev/null \
     | convert - -resize 64x36! -colorspace gray -format '%[fx:mean] %[fx:standard_deviation]' info: 2>/dev/null)
 [ -n "$sd" ] || exit 0   # labwc not up yet
 
