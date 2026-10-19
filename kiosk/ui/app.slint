@@ -43,9 +43,13 @@ component Card inherits Rectangle {
 
     accessible-role: button;
     accessible-label: root.item.name;
-    background: touch.pressed ? Mk.beton : Mk.wit;
-    border-width: root.selected ? 5px : 1px;
-    border-color: root.selected ? root.item.deep : Mk.lijn;
+    // flash: keeps the tap highlight ~¼ s after release, so a quick tap visibly registered.
+    property <bool> flash;
+    property <bool> hot: touch.pressed || root.flash;
+    background: root.hot ? root.item.light : Mk.wit;
+    animate background { duration: 120ms; }
+    border-width: root.selected || root.hot ? 5px : 1px;
+    border-color: root.selected || root.hot ? root.item.deep : Mk.lijn;
     opacity: root.item.sold-out ? 0.4 : 1;
     clip: true;
 
@@ -119,8 +123,9 @@ component Card inherits Rectangle {
 
     touch := TouchArea {
         enabled: !root.item.sold-out;
-        clicked => { root.picked(root.item.pk); }
+        clicked => { root.flash = true; root.picked(root.item.pk); }
     }
+    Timer { interval: 250ms; running: root.flash; triggered => { root.flash = false; } }
 }
 
 component Entries inherits Rectangle {
@@ -395,7 +400,7 @@ export component AppWindow inherits Window {
                     min-height: 72px;
                     max-height: 132px;
                     vertical-stretch: 1;
-                    background: band-touch.pressed ? c.light.darker(10%) : c.light;
+                    background: band-touch.pressed ? c.light.darker(25%) : c.light;
                     Rectangle {
                         x: 0;
                         width: c.name == root.category ? 16px : 0px;
@@ -428,7 +433,7 @@ export component AppWindow inherits Window {
                     min-height: 72px;
                     max-height: 132px;
                     vertical-stretch: 1;
-                    background: print-touch.pressed ? Mk.workshop-diep.darker(15%) : Mk.workshop-diep;
+                    background: print-touch.pressed ? Mk.workshop-diep.darker(25%) : Mk.workshop-diep;
                     Text {
                         x: 30px;
                         y: parent.height - self.height - 16px;
@@ -454,7 +459,7 @@ export component AppWindow inherits Window {
                     max-height: 132px;
                     vertical-stretch: 1;
                     property <color> deep: t.id == "laser" ? #A8401A : #34505E;
-                    background: tool-touch.pressed ? self.deep.darker(15%) : self.deep;
+                    background: tool-touch.pressed ? self.deep.darker(25%) : self.deep;
                     Rectangle { y: 0; height: 1px; background: #ffffff33; }
                     Text {
                         x: 30px;
@@ -857,7 +862,11 @@ export component AppWindow inherits Window {
         }
 
         // --- checkout / oath -------------------------------------------------
+        // CONFIRM unlocks after a countdown (state.rs CHECKOUT_LOCK, enforced there too),
+        // so CHECKOUT + CONFIRM can't be tapped through without looking.
         if root.screen == Screen.checkout-confirm: Entry {
+            property <int> left: 3;
+            Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
             kicker: root.volunteer ? "VOLUNTEER" : "STEP 1 OF 2";
             title: root.volunteer ? "The oath" : "Check your cart";
             light: root.volunteer ? Mk.openlab : Mk.herstel;
@@ -912,18 +921,9 @@ export component AppWindow inherits Window {
                         clicked => { root.action("back", 0); }
                     }
                     Press {
-                        text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
-                        width: 190px;
-                        min-height: 88px;
-                        radius: 0px;
-                        fill: Mk.openlab;
-                        ink: Mk.openlab-diep;
-                        font-size: 20px;
-                        weight: 800;
-                        clicked => { if (root.volunteer) { root.action("volunteer", 0); } else { root.volunteer-ask = true; } }
-                    }
-                    Press {
-                        text: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
+                        text: (root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →") + (left > 0 ? " (" + left + ")" : "");
+                        accessible-label: root.volunteer ? "I SWEAR IT" : "CONFIRM & PAY →";
+                        enabled: left == 0;
                         min-height: 88px;
                         radius: 0px;
                         fill: root.volunteer ? Mk.openlab-diep : Mk.workshop-diep;
