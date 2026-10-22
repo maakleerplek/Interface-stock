@@ -234,11 +234,11 @@ impl Machine {
             PrintPick::Unknown => (String::new(), be.print_price(&Part::default())),
         };
         self.info(format!("3D print added: {grams} g {material}"));
-        self.cart.prints.push(Print { material, grams, per_gram });
+        self.cart.prints.push(Print { material, grams, per_gram, minimum: be.print_minimum() });
         Ok(())
     }
 
-    /// Machine time goes in the cart at the machine's price, at least its minimum.
+    /// Machine time goes in the cart at the machine's price; its minimum counts per payment.
     fn add_time(&mut self, be: &dyn Backend, tool: Tool, minutes: u32) -> Result<(), String> {
         if minutes == 0 {
             return Err("Enter the minutes the machine ran.".into());
@@ -518,7 +518,7 @@ mod tests {
         m.handle(&be, Event::Button(Action::Print(PrintPick::TypeOf(9), 20)), Instant::now());
         let booked: Vec<&str> = m.cart.prints.iter().map(|p| p.material.as_str()).collect();
         assert_eq!(booked, ["", "PLA"]);
-        assert!((m.cart.total(|p| be.price(p)) - 4.0).abs() < 1e-9);   // 2 × 20 g × €0.10
+        assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // 2 × 20 g × €0.10 = €4, raised to the €5 minimum
     }
 
     #[test]

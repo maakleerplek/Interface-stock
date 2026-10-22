@@ -41,7 +41,9 @@ pub trait Backend: Send {
     fn category(&self, part: &Part) -> String;
     /// 3D-print price per gram of a filament.
     fn print_price(&self, part: &Part) -> f64;
-    /// Price per minute and the minimum per job of a machine.
+    /// Least a payment with a 3D print in it costs.
+    fn print_minimum(&self) -> f64;
+    /// Price per minute and the minimum per payment of a machine.
     fn tool_rate(&self, tool: Tool) -> (f64, f64);
     /// Laser timer sessions that can be paid here: time on them, not in a checkout yet.
     fn laser_sessions(&self) -> Vec<LaserSession> {
@@ -55,6 +57,8 @@ pub trait Backend: Send {
 pub const DEFAULT_PRINT_PRICE: f64 = 0.10;
 /// Machine price per minute when InvenTree has none (the stock app's default too).
 pub const DEFAULT_TOOL_PRICE: f64 = 0.50;
+/// Least a payment with machine use costs (bank costs), as in the stock app.
+pub const DEFAULT_MINIMUM: f64 = 5.0;
 
 /// (barcode, pk, name, price, category, stock)
 type DemoRow = (&'static str, i64, &'static str, f64, &'static str, f64);
@@ -189,8 +193,12 @@ impl Backend for Demo {
         DEFAULT_PRINT_PRICE
     }
 
+    fn print_minimum(&self) -> f64 {
+        DEFAULT_MINIMUM
+    }
+
     fn tool_rate(&self, _tool: Tool) -> (f64, f64) {
-        (DEFAULT_TOOL_PRICE, 5.0)
+        (DEFAULT_TOOL_PRICE, DEFAULT_MINIMUM)
     }
 
     fn laser_sessions(&self) -> Vec<LaserSession> {
