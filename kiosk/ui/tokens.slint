@@ -51,6 +51,8 @@ export struct CartRow {
     deep: color,
     /// A 3D print or machine job: it leaves the cart as a whole, so no +.
     whole: bool,
+    /// The top-up to the minimum per payment: no − and no +.
+    fixed: bool,
 }
 
 /// A machine paid per minute: id for the "time:<id>" action, price per minute, minimum per job.

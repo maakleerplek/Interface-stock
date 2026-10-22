@@ -30,6 +30,9 @@ impl Backend for Slow {
     fn print_price(&self, _: &Part) -> f64 {
         0.1
     }
+    fn print_minimum(&self) -> f64 {
+        5.0
+    }
     fn tool_rate(&self, _: Tool) -> (f64, f64) {
         (0.5, 5.0)
     }

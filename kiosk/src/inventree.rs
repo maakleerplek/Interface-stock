@@ -2,7 +2,7 @@
 //! `barcode_inventree.py` (lookups, stock levels, sale prices, stock
 //! removal, barcode cache) plus a cached product catalog for the grid.
 
-use crate::backend::{Backend, CatalogItem, LaserSession, StockLookupError, DEFAULT_PRINT_PRICE, DEFAULT_TOOL_PRICE};
+use crate::backend::{Backend, CatalogItem, LaserSession, StockLookupError, DEFAULT_MINIMUM, DEFAULT_PRINT_PRICE, DEFAULT_TOOL_PRICE};
 use crate::cart::{Cart, Part, Print, Tool, ToolTime};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -37,6 +37,8 @@ pub struct InvenTreeConfig {
     pub hidden_categories: Vec<String>,
     /// 3D-print price per gram for a filament without its own (PRINT_PRICE_PER_GRAM).
     pub print_price: f64,
+    /// Least a payment with a 3D print in it costs (PRINT_MINIMUM).
+    pub print_minimum: f64,
     /// Machine price per minute when InvenTree has none (LASER_PRICE_PER_MIN, CNC_PRICE_PER_MIN).
     pub laser_price: f64,
     pub cnc_price: f64,
@@ -57,6 +59,7 @@ impl InvenTreeConfig {
             tv_url: var("TV_PRESENTATION_URL").map(|u| u.trim_end_matches('/').to_string()),
             hidden_categories,
             print_price: var("PRINT_PRICE_PER_GRAM").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PRINT_PRICE),
+            print_minimum: var("PRINT_MINIMUM").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_MINIMUM),
             laser_price: var("LASER_PRICE_PER_MIN").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_TOOL_PRICE),
             cnc_price: var("CNC_PRICE_PER_MIN").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_TOOL_PRICE),
             laser_url: var("LASER_URL").unwrap_or_else(|| "https://10.72.1.246:8086/laser/api".into()).trim_end_matches('/').into(),
@@ -188,28 +191,29 @@ const MINIMUM_TEMPLATE: &str = "Minimum";
 /// Category of the machine parts (Tv-Presentation's INVENTREE_MACHINE_CATEGORY).
 const MACHINE_CATEGORY: &str = "machinegebruik";
 
-/// One 3D print as a sales-order extra line.
-pub fn print_line(order: i64, p: &Print) -> Value {
+/// One 3D print as a sales-order extra line. `price` is its share of the payment
+/// (`Cart::machine_prices`), folded into the price per gram.
+pub fn print_line(order: i64, p: &Print, price: f64) -> Value {
     json!({
         "order": order,
         "reference": "3D printing",
         "description": p.material,
         "quantity": p.grams,
-        "price": format!("{:.4}", p.per_gram),
+        "price": format!("{:.4}", price / p.grams as f64),
         "price_currency": "EUR",
     })
 }
 
-/// Machine time as a sales-order extra line. The minimum is folded into the
-/// price per minute, so minutes × price stays what was paid.
-pub fn time_line(order: i64, t: &ToolTime) -> Value {
+/// Machine time as a sales-order extra line. Its share of the payment, with the
+/// top-up to the minimum, is folded into the price per minute, so minutes × price stays what was paid.
+pub fn time_line(order: i64, t: &ToolTime, price: f64) -> Value {
     json!({
         "order": order,
         "reference": t.tool.reference(),
         // The session's name, as the stock app books it; none = typed in at the till.
         "description": t.session.as_ref().map_or("", |(_, name)| name.as_str()),
         "quantity": t.minutes,
-        "price": format!("{:.4}", t.price() / t.minutes as f64),
+        "price": format!("{:.4}", price / t.minutes as f64),
         "price_currency": "EUR",
     })
 }
@@ -438,7 +442,9 @@ impl Shared {
 
     /// Returns the sales order's reference.
     /// `volunteer`: booked at €0, so the analytics count it as volunteer use, not money in.
-    fn sell_services(&self, prints: &[Print], times: &[ToolTime], volunteer: bool) -> Result<String, String> {
+    fn sell_services(&self, cart: &Cart) -> Result<String, String> {
+        let (prints, times, volunteer) = (&cart.prints, &cart.times, cart.volunteer);
+        let (print_prices, time_prices) = cart.machine_prices();
         const T: Duration = Duration::from_secs(10);
         let ok = |r: Result<(u16, Value), String>| match r {
             Ok((200 | 201, v)) => Ok(v),
@@ -454,7 +460,8 @@ impl Shared {
         let pk = order.get("pk").and_then(Value::as_i64).ok_or("No sales order created")?;
         let reference = order.get("reference").and_then(Value::as_str).unwrap_or_default().to_string();
         let book = || -> Result<(), String> {
-            for mut line in prints.iter().map(|p| print_line(pk, p)).chain(times.iter().map(|t| time_line(pk, t))) {
+            let print_lines = prints.iter().zip(&print_prices).map(|(p, &price)| print_line(pk, p, price));
+            for mut line in print_lines.chain(times.iter().zip(&time_prices).map(|(t, &price)| time_line(pk, t, price))) {
                 if volunteer {
                     line["price"] = json!("0.0000");
                 }
@@ -738,6 +745,10 @@ impl Backend for InvenTree {
         self.sh.catalog.read().unwrap().print_prices.get(&part.pk).copied().unwrap_or(self.sh.cfg.print_price)
     }
 
+    fn print_minimum(&self) -> f64 {
+        self.sh.cfg.print_minimum
+    }
+
     fn laser_sessions(&self) -> Vec<LaserSession> {
         self.sh.laser.read().unwrap().clone()
     }
@@ -790,7 +801,7 @@ impl Backend for InvenTree {
         // Prints first: the stock is verified above, so the removal below rarely
         // fails, and a failed print booking leaves the stock untouched.
         if cart.always_paid() {
-            let order = sh.sell_services(&cart.prints, &cart.times, cart.volunteer)?;
+            let order = sh.sell_services(cart)?;
             // The sale stands; a session the laser service could not take now is retried by poll_laser.
             for (id, _) in cart.times.iter().filter_map(|t| t.session.as_ref()) {
                 if !sh.mark_laser_paid(id, &order) {
@@ -808,11 +819,12 @@ impl Backend for InvenTree {
             }
         }
         let (action, paid) = if cart.volunteer { ("volunteer", false) } else { ("checkout", true) };
-        for p in &cart.prints {
-            sh.changelog(action, &format!("3D print · {} g {}", p.grams, p.material), 1, paid.then(|| p.price()));
+        let (print_prices, time_prices) = cart.machine_prices();
+        for (p, price) in cart.prints.iter().zip(print_prices) {
+            sh.changelog(action, &format!("3D print · {} g {}", p.grams, p.material), 1, paid.then_some(price));
         }
-        for t in &cart.times {
-            sh.changelog(action, &format!("{} · {} min", t.tool.label(), t.minutes), 1, paid.then(|| t.price()));
+        for (t, price) in cart.times.iter().zip(time_prices) {
+            sh.changelog(action, &format!("{} · {} min", t.tool.label(), t.minutes), 1, paid.then_some(price));
         }
         for (part, qty) in &cart.items {
             if cart.volunteer {
@@ -833,14 +845,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn time_line_keeps_minutes_and_pays_the_minimum() {
+    fn lines_keep_quantity_and_book_their_share() {
         let job = ToolTime { tool: Tool::Laser, minutes: 4, per_minute: 0.5, minimum: 5.0, session: None };
-        let l = time_line(7, &job);
+        let l = time_line(7, &job, 5.0);
         assert_eq!((l["reference"].as_str(), l["quantity"].as_u64(), l["price"].as_str()), (Some("Lasertime"), Some(4), Some("1.2500")));
         let job = ToolTime { tool: Tool::Cnc, minutes: 30, ..job };
-        assert_eq!((time_line(7, &job)["reference"].as_str(), time_line(7, &job)["price"].as_str()), (Some("CNC time"), Some("0.5000")));
+        assert_eq!((time_line(7, &job, 15.0)["reference"].as_str(), time_line(7, &job, 15.0)["price"].as_str()), (Some("CNC time"), Some("0.5000")));
         let job = ToolTime { tool: Tool::Laser, session: Some(("s1".into(), "Ruben".into())), ..job };
-        assert_eq!(time_line(7, &job)["description"].as_str(), Some("Ruben"));
+        assert_eq!(time_line(7, &job, 15.0)["description"].as_str(), Some("Ruben"));
+        let print = Print { material: "PLA".into(), grams: 20, per_gram: 0.1, minimum: 5.0 };
+        assert_eq!(print_line(7, &print, 2.5)["price"].as_str(), Some("0.1250"));
     }
 
     #[test]

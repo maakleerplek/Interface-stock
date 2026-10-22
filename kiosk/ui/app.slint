@@ -180,7 +180,8 @@ component Entries inherits Rectangle {
                     font-weight: 700;
                     vertical-alignment: center;
                 }
-                if root.editable: Press {
+                if root.editable && row.fixed: Rectangle { width: 128px; }
+                if root.editable && !row.fixed: Press {
                     text: "−";
                     width: 58px;
                     min-height: 58px;
@@ -193,7 +194,7 @@ component Entries inherits Rectangle {
                     accessible-label: "minus " + row.name;
                     clicked => { root.dec(i); }
                 }
-                if root.editable && row.whole: Rectangle { width: 58px; }
+                if root.editable && row.whole && !row.fixed: Rectangle { width: 58px; }
                 if root.editable && !row.whole: Press {
                     text: "+";
                     width: 58px;
@@ -310,7 +311,7 @@ export component AppWindow inherits Window {
     in-out property <int> time-minutes: 0;
     // "For volunteers only" pop-up before VOLUNTEER turns on, so a visitor does not tap it by accident.
     in-out property <bool> volunteer-ask: false;
-    property <float> time-price: root.time-minutes > 0 ? Math.max(root.time-minutes * root.time-per-minute, root.time-minimum) : 0;
+    property <float> time-price: root.time-minutes > 0 ? root.time-minutes * root.time-per-minute : 0;
 
     callback action(string, int);
     callback pick(int);
@@ -750,7 +751,7 @@ export component AppWindow inherits Window {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "€" + root.time-per-minute.to-fixed(2) + " per minute" + (root.time-minimum > 0 ? " · minimum €" + root.time-minimum.to-fixed(2) + " per job" : "");
+                        text: "€" + root.time-per-minute.to-fixed(2) + " per minute" + (root.time-minimum > 0 ? " · minimum €" + root.time-minimum.to-fixed(2) + " per payment" : "");
                         color: Mk.inkt;
                         font-size: 20px;
                         wrap: word-wrap;
@@ -783,7 +784,7 @@ export component AppWindow inherits Window {
                     Text { text: "TO PAY"; color: Mk.grafiet; font-size: 16px; font-weight: 800; }
                     Text { text: "€" + root.time-price.to-fixed(2); color: Mk.inkt; font-size: 56px; font-weight: 800; }
                     Text {
-                        text: root.time-minutes > 0 && root.time-minutes * root.time-per-minute < root.time-minimum ? "Under the minimum: you pay the minimum per job." : " ";
+                        text: root.time-minutes > 0 && root.time-minutes * root.time-per-minute < root.time-minimum ? "Under the minimum: with your prints and other machine time it is topped up to €" + root.time-minimum.to-fixed(2) + " at checkout." : " ";
                         color: Mk.grafiet;
                         font-size: 16px;
                     }

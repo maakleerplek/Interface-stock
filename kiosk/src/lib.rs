@@ -102,6 +102,8 @@ pub struct RowData {
     pub deep: Color,
     /// A 3D print or machine job: no + on its row.
     pub whole: bool,
+    /// The top-up to the minimum per payment: no − or + on its row.
+    pub fixed: bool,
 }
 
 pub struct CategoryData {
@@ -128,7 +130,7 @@ pub struct View {
     pub filaments: Vec<TileData>,
     /// Filament types for the 3D-print screen: (a filament's pk, type, "from" price per gram).
     pub filament_types: Vec<(i32, String, String)>,
-    /// Machines for the minutes screen: (id, name, price per minute, minimum per job).
+    /// Machines for the minutes screen: (id, name, price per minute, minimum per payment).
     pub tools: Vec<(String, String, f32, f32)>,
     /// Laser timer sessions to pay: (name, minutes, price).
     pub laser_sessions: Vec<(String, i32, String)>,
@@ -235,6 +237,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 price: format_price(price(p) * *q as f64),
                 deep: category_colors(&be.category(p)).1,
                 whole: false,
+                fixed: false,
             })
             .chain(m.cart.prints.iter().map(|p| RowData {
                 name: if p.material.is_empty() { format!("3D print · {} g", p.grams) } else { format!("3D print · {} · {} g", p.material, p.grams) },
@@ -242,6 +245,7 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 price: format_price(p.price()),
                 deep: category_colors("filament").1,
                 whole: true,
+                fixed: false,
             }))
             .chain(m.cart.times.iter().map(|t| RowData {
                 name: format!("{} · {} min", t.tool.label(), t.minutes),
@@ -249,6 +253,16 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 price: format_price(t.price()),
                 deep: category_colors(t.tool.label()).1,
                 whole: true,
+                fixed: false,
+            }))
+            .chain((m.cart.top_up() > 0.0).then(|| RowData {
+                // Topped up, the machine lines add up to exactly the minimum.
+                name: format!("Minimum {}", format_price({ let (p, t) = m.cart.machine_prices(); p.iter().chain(&t).sum() })),
+                qty: 1,
+                price: format_price(m.cart.top_up()),
+                deep: category_colors("all").1,
+                whole: true,
+                fixed: true,
             }))
             .collect(),
         units: m.cart.units() as i32,
@@ -276,10 +290,10 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             })
             .collect(),
         laser_sessions: {
-            let (per_minute, minimum) = be.tool_rate(cart::Tool::Laser);
+            let per_minute = be.tool_rate(cart::Tool::Laser).0;
             m.open_sessions(be)
                 .into_iter()
-                .map(|s| (s.name, s.minutes as i32, format_price((s.minutes as f64 * per_minute).max(minimum))))
+                .map(|s| (s.name, s.minutes as i32, format_price(s.minutes as f64 * per_minute)))
                 .collect()
         },
         cart_categories: cats.join(" / ").to_uppercase(),
@@ -367,7 +381,7 @@ macro_rules! define_ui_glue {
             let rows: Vec<CartRow> = v
                 .rows
                 .into_iter()
-                .map(|r| CartRow { name: r.name.into(), qty: r.qty, price: r.price.into(), deep: r.deep, whole: r.whole })
+                .map(|r| CartRow { name: r.name.into(), qty: r.qty, price: r.price.into(), deep: r.deep, whole: r.whole, fixed: r.fixed })
                 .collect();
             ui.set_rows(ModelRc::new(VecModel::from(rows)));
             ui.set_units(v.units);

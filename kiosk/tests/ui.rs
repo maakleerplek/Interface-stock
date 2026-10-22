@@ -328,26 +328,28 @@ fn tap_through_every_screen() {
     r.scan("CANCEL");
     assert_eq!(r.units(), 0);
 
-    // Machine time: 4 minutes of lasercut costs the €5 minimum, never free.
+    // Machine time: 4 minutes of lasercut (€2) is topped up to the €5 minimum per payment, on its own row.
     r.tap("LASERCUT");
     assert!(r.ui.get_time_open());
     r.tap("4");
     r.shot("laser-minutes");
     r.tap("ADD TO CART");
     assert!(!r.ui.get_time_open());
-    assert_eq!(r.ui.get_rows().row_count(), 1);
+    assert_eq!(r.ui.get_rows().row_count(), 2);
+    assert_eq!(r.ui.get_rows().row_data(1).unwrap().price.as_str(), "€3.00");
     assert_eq!(r.ui.get_total().as_str(), "€5.00");
     r.shot("laser-in-cart");
     r.tap("CNC");
     r.tap("3");
     r.tap("0");
     r.tap("ADD TO CART");
-    assert_eq!(r.ui.get_total().as_str(), "€20.00");   // + 30 min × €0.50
+    assert_eq!(r.ui.get_total().as_str(), "€17.00");   // €2 + 30 min × €0.50, over the minimum
+    assert_eq!(r.ui.get_rows().row_count(), 2);   // so no top-up row
     // A session on the laser timer is paid with one tap, and is not offered twice.
     r.tap("LASERCUT");
     r.shot("laser-sessions");
     r.tap("Ruben  ·  12 min  ·  €6.00");
-    assert_eq!(r.ui.get_total().as_str(), "€26.00");
+    assert_eq!(r.ui.get_total().as_str(), "€23.00");
     assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
     r.tap("VOLUNTEER DRINK");
     r.tap("YES, I'M A VOLUNTEER");

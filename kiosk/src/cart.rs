@@ -35,6 +35,7 @@ pub struct Print {
     pub material: String,
     pub grams: u32,
     pub per_gram: f64,
+    pub minimum: f64,
 }
 
 /// Type and colour from a filament's InvenTree name, "[Refill] TYPE [hardness] Colour (weight)":
@@ -109,7 +110,7 @@ impl Tool {
     }
 }
 
-/// Machine time paid at the till: minutes at a price per minute, at least the minimum per job.
+/// Machine time paid at the till: minutes at a price per minute. The minimum counts per payment, see `Cart::top_up`.
 #[derive(Clone, Debug)]
 pub struct ToolTime {
     pub tool: Tool,
@@ -122,7 +123,7 @@ pub struct ToolTime {
 
 impl ToolTime {
     pub fn price(&self) -> f64 {
-        (self.minutes as f64 * self.per_minute).max(self.minimum)
+        self.minutes as f64 * self.per_minute
     }
 }
 
@@ -198,6 +199,25 @@ impl Cart {
         self.items.iter().map(|(p, q)| price(p) * *q as f64).sum::<f64>()
             + self.prints.iter().map(Print::price).sum::<f64>()
             + self.times.iter().map(ToolTime::price).sum::<f64>()
+            + self.top_up()
+    }
+
+    /// What prints and machine time together miss to reach the minimum per payment
+    /// (bank costs): the highest minimum among them. Drinks and products do not count.
+    pub fn top_up(&self) -> f64 {
+        let minimum = self.prints.iter().map(|p| p.minimum).chain(self.times.iter().map(|t| t.minimum)).fold(0.0, f64::max);
+        let raw = self.prints.iter().map(Print::price).sum::<f64>() + self.times.iter().map(ToolTime::price).sum::<f64>();
+        (minimum - raw).max(0.0)
+    }
+
+    /// Price of each print and each machine job with the top-up spread over them in
+    /// proportion to their price, so the analytics give each machine its share.
+    pub fn machine_prices(&self) -> (Vec<f64>, Vec<f64>) {
+        let raw: Vec<f64> = self.prints.iter().map(Print::price).chain(self.times.iter().map(ToolTime::price)).collect();
+        let (sum, top, n) = (raw.iter().sum::<f64>(), self.top_up(), raw.len() as f64);
+        let mut all = raw.iter().map(|r| r + if sum > 0.0 { top * r / sum } else { top / n });
+        let prints = all.by_ref().take(self.prints.len()).collect();
+        (prints, all.collect())
     }
 
     pub fn clear(&mut self) {
@@ -239,7 +259,7 @@ mod tests {
     fn prints_add_to_the_total_and_are_removed_as_a_row() {
         let mut c = Cart::default();
         c.add(part(1));
-        c.prints.push(Print { material: "P9".into(), grams: 50, per_gram: 0.12 });
+        c.prints.push(Print { material: "P9".into(), grams: 50, per_gram: 0.12, minimum: 5.0 });
         assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2.00 + 50 g × 0.12
         assert_eq!(c.units(), 2);
         assert_eq!(c.remove_one(1).as_deref(), Some("P9"));   // row 1 is the print
@@ -247,19 +267,40 @@ mod tests {
         assert!(c.remove_one(5).is_none());
     }
 
+    fn job(minutes: u32) -> ToolTime {
+        ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, session: None }
+    }
+
+    fn print(grams: u32) -> Print {
+        Print { material: "P9".into(), grams, per_gram: 0.1, minimum: 5.0 }
+    }
+
     #[test]
-    fn machine_time_costs_at_least_the_minimum() {
-        let job = |minutes| ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, session: None };
-        assert!((job(4).price() - 5.0).abs() < 1e-9);    // 4 min × €0.50 = €2, minimum €5
-        assert!((job(25).price() - 12.5).abs() < 1e-9);
+    fn machine_time_is_raised_to_the_minimum_per_payment() {
         let mut c = Cart::default();
         c.add(part(1));
-        c.prints.push(Print { material: "P9".into(), grams: 10, per_gram: 0.1 });
+        c.prints.push(print(10));
         c.times.push(job(4));
         assert_eq!(c.units(), 3);
-        assert!((c.total(|_| 2.0) - 8.0).abs() < 1e-9);   // 2 + 1 + 5
+        assert!((c.total(|_| 2.0) - 7.0).abs() < 1e-9);   // drink 2 + €1 print + €2 laser raised to €5 together
         assert_eq!(c.remove_one(2).as_deref(), Some("Lasercut"));   // row 2 is the job
         assert!(c.times.is_empty() && c.always_paid());
+    }
+
+    #[test]
+    fn the_minimum_counts_once_per_payment() {
+        let total = |prints: Vec<Print>, times: Vec<ToolTime>| Cart { prints, times, ..Default::default() }.total(|_| 0.0);
+        assert!((total(vec![print(30)], vec![job(8)]) - 7.0).abs() < 1e-9);   // €3 print + €4 laser
+        assert!((total(vec![], vec![job(4), job(4)]) - 5.0).abs() < 1e-9);    // two €2 jobs: €5, not €10
+        assert!((total(vec![], vec![job(12)]) - 6.0).abs() < 1e-9);           // above the minimum: as is
+        assert!((total(vec![print(30)], vec![]) - 5.0).abs() < 1e-9);         // a print alone too
+    }
+
+    #[test]
+    fn the_top_up_is_spread_in_proportion() {
+        let c = Cart { prints: vec![print(10)], times: vec![job(4)], ..Default::default() };   // €1 + €2
+        let (p, t) = c.machine_prices();
+        assert!((p[0] - 5.0 / 3.0).abs() < 1e-9 && (t[0] - 10.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
