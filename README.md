@@ -32,8 +32,10 @@ can change (new Wi-Fi MAC); the backup and SSH use 10.72.3.105.
 **How it runs:** labwc starts on tty1 (autologin `pi`) and runs `pi/labwc/autostart`:
 the kiosk (`kiosk/interface-stock`) on DSI-1 and `scripts/tv-browser.sh` on
 HDMI-A-1, each restarted when it exits. The kiosk binary is built by GitHub Actions
-(`.github/workflows/kiosk.yml`, release `kiosk-latest`); `update.sh` runs nightly at
-01:00 and pulls git and the newest build. `scripts/kiosk-watchdog.sh` (every 2 min)
+(`.github/workflows/kiosk.yml`, release `kiosk-latest`); every 5 minutes `update.sh`
+runs `scripts/autodeploy.sh`: once CI on a new master commit is green it pulls and runs
+`deploy.sh` (newest build, watchdog, check that kiosk and TV run), rolling back if that
+fails. Log: `.git/autodeploy.log`. `scripts/kiosk-watchdog.sh` (every 2 min)
 restarts a blank TV page, reloads Wi-Fi and keeps the disk from filling up.
 
 ---
