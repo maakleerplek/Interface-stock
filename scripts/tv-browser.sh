@@ -30,6 +30,9 @@ flags=(
    --disable-sync
    --metrics-recording-only
    --no-first-run
+   # Page cache in RAM (tmpfs), not on the SD card, and kept small for the 512 MB.
+   --disk-cache-dir=/run/user/1000/chromium-cache
+   --disk-cache-size=16000000
 )
 
 URL=$(sed -n 's/^TV_PRESENTATION_URL=//p' "$(dirname "$0")/../.env" | tr -d '"')
