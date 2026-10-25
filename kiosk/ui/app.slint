@@ -309,6 +309,12 @@ export component AppWindow inherits Window {
     in-out property <float> time-per-minute;
     in-out property <float> time-minimum;
     in-out property <int> time-minutes: 0;
+    // The laser screen shows the cuts; this switches it to typing minutes (no timer).
+    in-out property <bool> laser-typing: false;
+    // The ticked cuts together, from the kiosk: count, laser time, price rounded up once.
+    in property <int> cuts-picked;
+    in property <string> cuts-picked-time;
+    in property <string> cuts-picked-price;
     // "For volunteers only" pop-up before VOLUNTEER turns on, so a visitor does not tap it by accident.
     in-out property <bool> volunteer-ask: false;
     property <float> time-price: root.time-minutes > 0 ? root.time-minutes * root.time-per-minute : 0;
@@ -477,6 +483,7 @@ export component AppWindow inherits Window {
                             root.time-per-minute = t.per-minute;
                             root.time-minimum = t.minimum;
                             root.time-minutes = 0;
+                            root.laser-typing = false;
                             root.time-open = true;
                         }
                     }
@@ -733,8 +740,136 @@ export component AppWindow inherits Window {
             }
         }
 
+        // --- laser: tick your cuts from the laser timer, add them to the cart --
+        if root.screen == Screen.shop && root.time-open && root.time-id == "laser" && !root.laser-typing: Rectangle {
+            background: Mk.beton;
+            TouchArea { }   // nothing behind it reacts while it is open
+            HorizontalLayout {
+                padding: 16px;
+                spacing: 16px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+                    Text { text: "LASERCUT · YOUR CUTS"; color: Mk.inkt; font-size: 28px; font-weight: 800; }
+                    Text {
+                        text: root.laser-sessions.length > 0
+                            ? "Tap the cuts that are yours. A cut shows up here 5 s after the laser stops."
+                            : "No open cuts. When the laser stops, your cut shows up here.";
+                        color: Mk.grafiet;
+                        font-size: 18px;
+                        wrap: word-wrap;
+                    }
+                    Flickable {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            alignment: start;
+                            for s[i] in root.laser-sessions: Rectangle {
+                                height: 80px;
+                                background: s.picked ? #F6C9B4 : Mk.wit;
+                                border-width: 1px;
+                                border-color: Mk.lijn;
+                                HorizontalLayout {
+                                    padding-left: 18px;
+                                    padding-right: 22px;
+                                    spacing: 18px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 44px;
+                                            height: 44px;
+                                            background: s.picked ? Mk.inkt : Mk.wit;
+                                            border-width: 3px;
+                                            border-color: Mk.inkt;
+                                            if s.picked: Path {
+                                                width: 44px;
+                                                height: 44px;
+                                                viewbox-width: 44;
+                                                viewbox-height: 44;
+                                                commands: "M 10 22 L 19 31 L 34 13";
+                                                stroke: Mk.wit;
+                                                stroke-width: 5px;
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        text: s.name;
+                                        color: Mk.inkt;
+                                        font-size: 24px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: s.time;
+                                        color: Mk.inkt;
+                                        font-size: 30px;
+                                        font-weight: 800;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: s.name + "  ·  " + s.time;
+                                    clicked => { root.action("cut:" + i, 0); }
+                                }
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    width: 380px;
+                    spacing: 10px;
+                    Text { text: "TO ADD"; color: Mk.grafiet; font-size: 16px; font-weight: 800; }
+                    Text { text: root.cuts-picked > 0 ? root.cuts-picked-price : "€0.00"; color: Mk.inkt; font-size: 56px; font-weight: 800; }
+                    Text {
+                        text: root.cuts-picked == 0 ? "Nothing ticked yet."
+                            : (root.cuts-picked == 1 ? "1 cut, " : root.cuts-picked + " cuts, ") + root.cuts-picked-time + " laser time";
+                        color: Mk.inkt;
+                        font-size: 20px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "€" + root.time-per-minute.to-fixed(2) + " per minute, rounded up to whole minutes. At least €" + root.time-minimum.to-fixed(2) + " per payment, with your prints and other machine time together.";
+                        color: Mk.grafiet;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Press {
+                        text: root.cuts-picked <= 1 ? "ADD CUT TO CART" : "ADD " + root.cuts-picked + " CUTS TO CART";
+                        radius: 0px;
+                        min-height: 88px;
+                        enabled: root.cuts-picked > 0;
+                        fill: #A8401A;
+                        clicked => {
+                            root.action("cuts:add", 0);
+                            root.time-open = false;
+                        }
+                    }
+                    Press {
+                        text: "NO TIMER? TYPE THE MINUTES";
+                        radius: 0px;
+                        font-size: 18px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.inkt;
+                        clicked => { root.laser-typing = true; }
+                    }
+                    Press {
+                        text: "BACK";
+                        radius: 0px;
+                        fill: Mk.wit;
+                        ink: Mk.inkt;
+                        outline: Mk.lijn;
+                        clicked => { root.time-open = false; }
+                    }
+                }
+            }
+        }
+
         // --- machine time: type the minutes, add to the cart ----------------
-        if root.screen == Screen.shop && root.time-open: Rectangle {
+        if root.screen == Screen.shop && root.time-open && (root.time-id != "laser" || root.laser-typing): Rectangle {
             background: Mk.beton;
             TouchArea { }   // nothing behind it reacts while it is open
             HorizontalLayout {
@@ -755,30 +890,6 @@ export component AppWindow inherits Window {
                         color: Mk.inkt;
                         font-size: 20px;
                         wrap: word-wrap;
-                    }
-                    if root.time-id == "laser" && root.laser-sessions.length > 0: Text {
-                        text: "YOUR CUTS ON THE LASER TIMER? TAP EACH ONE TO ADD IT:";
-                        color: Mk.inkt;
-                        font-size: 16px;
-                        font-weight: 800;
-                    }
-                    if root.time-id == "laser": Flickable {
-                        height: root.laser-sessions.length > 0 ? min(3, root.laser-sessions.length) * 72px : 0;
-                        VerticalLayout {
-                            alignment: start;
-                            spacing: 8px;
-                            for s[i] in root.laser-sessions: Press {
-                                text: s.name + "  ·  " + s.time;
-                                min-height: 64px;
-                                radius: 0px;
-                                font-size: 20px;
-                                fill: #A8401A;
-                                clicked => {
-                                    // Stays open: several cuts can be added; an added one leaves the list.
-                                    root.action("session:" + i, 0);
-                                }
-                            }
-                        }
                     }
                     Rectangle { vertical-stretch: 1; }
                     Text { text: "TO PAY"; color: Mk.grafiet; font-size: 16px; font-weight: 800; }
@@ -809,7 +920,6 @@ export component AppWindow inherits Window {
                         }
                     }
                     Press {
-                        // BACK, not CANCEL: cuts added above stay in the cart.
                         text: "BACK";
                         radius: 0px;
                         fill: Mk.wit;

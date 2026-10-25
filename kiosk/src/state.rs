@@ -47,6 +47,10 @@ pub enum Action {
     Time(Tool, u32),
     /// Pay laser timer session `n` of `open_sessions`.
     Session(usize),
+    /// Tick or untick laser cut `n` of `open_sessions` on the laser screen.
+    ToggleCut(usize),
+    /// Put the ticked laser cuts in the cart.
+    AddCuts,
     /// One unit less of cart line `n`.
     Decrement(usize),
     PagePrev,
@@ -108,6 +112,8 @@ pub struct Machine {
     pub last_part: Option<Part>,
     /// Units and total of the volunteer checkout that just finished.
     pub done_summary: (u32, f64),
+    /// Laser cuts ticked on the laser screen, by session id. Unticking or leaving removes nothing.
+    pub picked_cuts: Vec<String>,
     last_interaction: Instant,
     entered: Instant,
     message_at: Instant,
@@ -121,6 +127,7 @@ impl Machine {
             message: None,
             last_part: None,
             done_summary: (0, 0.0),
+            picked_cuts: vec![],
             last_interaction: now,
             entered: now,
             message_at: now,
@@ -146,6 +153,7 @@ impl Machine {
 
     fn reset(&mut self, now: Instant) {
         self.cart.clear();
+        self.picked_cuts.clear();   // the next visitor starts with nothing ticked
         self.last_part = None;
         self.go(State::Idle, now);
     }
@@ -316,6 +324,32 @@ impl Machine {
                 Ok(()) => self.go(State::Shopping, now),
                 Err(e) => self.error(e),
             },
+            (State::Idle | State::Shopping, Event::Button(ToggleCut(n))) => {
+                if let Some(s) = self.open_sessions(be).into_iter().nth(n) {
+                    match self.picked_cuts.iter().position(|id| *id == s.id) {
+                        Some(i) => { self.picked_cuts.remove(i); }
+                        None => self.picked_cuts.push(s.id),
+                    }
+                }
+            }
+            (State::Idle | State::Shopping, Event::Button(AddCuts)) => {
+                let picked = std::mem::take(&mut self.picked_cuts);
+                let mut added = 0;
+                // Add by id: each added cut leaves open_sessions, so the index of the next one moves.
+                for id in &picked {
+                    if let Some(n) = self.open_sessions(be).iter().position(|s| s.id == *id) {
+                        if self.add_session(be, n).is_ok() { added += 1; }
+                    }
+                }
+                if added > 0 {
+                    let line = self.cart.times.iter().find(|t| !t.sessions.is_empty());
+                    let (n, secs) = line.map_or((0, 0.0), |t| (t.sessions.len(), t.seconds));
+                    self.info(format!("Laser: {} in the cart, {}", if n == 1 { "1 cut".into() } else { format!("{n} cuts") }, duration(secs)));
+                    self.go(State::Shopping, now);
+                } else {
+                    self.error("Those laser cuts are gone. Try again.");
+                }
+            }
             (State::Idle, Event::Button(Volunteer)) => {
                 self.info("Add a drink first, then tap VOLUNTEER.")
             }

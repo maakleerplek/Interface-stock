@@ -331,6 +331,7 @@ fn tap_through_every_screen() {
     // Machine time: 4 minutes of lasercut (€2) is topped up to the €5 minimum per payment, on its own row.
     r.tap("LASERCUT");
     assert!(r.ui.get_time_open());
+    r.tap("NO TIMER? TYPE THE MINUTES");
     r.tap("4");
     r.shot("laser-minutes");
     r.tap("ADD TO CART");
@@ -345,16 +346,23 @@ fn tap_through_every_screen() {
     r.tap("ADD TO CART");
     assert_eq!(r.ui.get_total().as_str(), "€17.00");   // €2 + 30 min × €0.50, over the minimum
     assert_eq!(r.ui.get_rows().row_count(), 2);   // so no top-up row
-    // Cuts on the laser timer go in with one tap each, are not offered twice, and
-    // together are one laser line rounded up once: 11:40 + 1:10 = 12:50 → 13 min.
+    // Cuts on the laser timer: tick them, untick one, tick it again, then add. They are one
+    // laser line rounded up once (11:40 + 1:10 = 12:50 → 13 min) and are not offered again.
     r.tap("LASERCUT");
-    r.shot("laser-sessions");
+    assert!(!r.ui.get_laser_typing(), "the laser opens on the cuts, not the keypad");
     r.tap("Cut 14:32  ·  11:40");
-    assert_eq!(r.ui.get_total().as_str(), "€23.00");
     r.tap("Cut 14:50  ·  1:10");
+    r.tap("Cut 14:50  ·  1:10");
+    assert_eq!((r.ui.get_cuts_picked(), r.ui.get_cuts_picked_price().as_str()), (1, "€6.00"));
+    r.tap("Cut 14:50  ·  1:10");
+    assert_eq!((r.ui.get_cuts_picked(), r.ui.get_cuts_picked_time().as_str()), (2, "12:50"));
+    assert_eq!(r.ui.get_cuts_picked_price().as_str(), "€6.50");
+    r.shot("laser-cuts");
+    assert_eq!(r.ui.get_total().as_str(), "€17.00", "ticking puts nothing in the cart yet");
+    r.tap("ADD 2 CUTS TO CART");
+    assert!(!r.ui.get_time_open());
     assert_eq!(r.ui.get_total().as_str(), "€23.50");
     assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
-    r.tap("BACK");
     r.tap("VOLUNTEER DRINK");
     r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer(), "a volunteer's machine time is free, booked at €0");

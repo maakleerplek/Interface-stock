@@ -138,8 +138,10 @@ pub struct View {
     pub filament_types: Vec<(i32, String, String)>,
     /// Machines for the minutes screen: (id, name, price per minute, minimum per payment).
     pub tools: Vec<(String, String, f32, f32)>,
-    /// Laser timer cuts to pay: (name, minutes, laser time as 3:12).
-    pub laser_sessions: Vec<(String, i32, String)>,
+    /// Laser timer cuts to pay: (name, minutes, laser time as 3:12, ticked).
+    pub laser_sessions: Vec<(String, i32, String, bool)>,
+    /// The ticked cuts together: (count, laser time as 3:12, price rounded up once).
+    pub cuts_picked: (i32, String, String),
     pub cart_categories: String,
     pub done_summary: String,
 }
@@ -295,7 +297,17 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
                 (t.id().into(), t.label().to_uppercase(), per_minute as f32, minimum as f32)
             })
             .collect(),
-        laser_sessions: m.open_sessions(be).into_iter().map(|s| (s.name, s.minutes as i32, duration(s.seconds))).collect(),
+        laser_sessions: m
+            .open_sessions(be)
+            .into_iter()
+            .map(|s| { let picked = m.picked_cuts.contains(&s.id); (s.name, s.minutes as i32, duration(s.seconds), picked) })
+            .collect(),
+        cuts_picked: {
+            let picked: Vec<_> = m.open_sessions(be).into_iter().filter(|s| m.picked_cuts.contains(&s.id)).collect();
+            let seconds: f64 = picked.iter().map(|s| s.seconds).sum();
+            let minutes = ((seconds * 1000.0).round() / 1000.0 / 60.0).ceil();
+            (picked.len() as i32, duration(seconds), format!("€{:.2}", minutes * be.tool_rate(cart::Tool::Laser).0))
+        },
         cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
             "{done_units} item{} · {}",
@@ -337,6 +349,13 @@ pub fn action_from(name: &str, n: i32) -> Option<Action> {
     // "session:<n>", a laser timer session from the minutes screen.
     if let Some(n) = name.strip_prefix("session:") {
         return Some(Action::Session(n.parse().ok()?));
+    }
+    // "cut:<n>" ticks or unticks laser cut n; "cuts:add" puts the ticked ones in the cart.
+    if let Some(n) = name.strip_prefix("cut:") {
+        return Some(Action::ToggleCut(n.parse().ok()?));
+    }
+    if name == "cuts:add" {
+        return Some(Action::AddCuts);
     }
     // "time:<machine>" with the minutes as n, from the minutes screen.
     if let Some(id) = name.strip_prefix("time:") {
@@ -468,9 +487,12 @@ macro_rules! define_ui_glue {
             let sessions: Vec<LaserSessionRow> = v
                 .laser_sessions
                 .into_iter()
-                .map(|(name, minutes, time)| LaserSessionRow { name: name.into(), minutes, time: time.into() })
+                .map(|(name, minutes, time, picked)| LaserSessionRow { name: name.into(), minutes, time: time.into(), picked })
                 .collect();
             ui.set_laser_sessions(ModelRc::new(VecModel::from(sessions)));
+            ui.set_cuts_picked(v.cuts_picked.0);
+            ui.set_cuts_picked_time(v.cuts_picked.1.into());
+            ui.set_cuts_picked_price(v.cuts_picked.2.into());
             ui.set_cart_categories(v.cart_categories.into());
             ui.set_done_summary(v.done_summary.into());
             refilter(ui);
