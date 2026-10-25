@@ -301,7 +301,7 @@ export component AppWindow inherits Window {
     in-out property <int> print-grams: 0;
     // Machine time: the machines (price per minute, minimum), and the minutes screen's state.
     in property <[ToolRate]> tools;
-    // Open laser timer sessions, paid with one tap on the LASERCUT screen.
+    // Open laser cuts, added with one tap each on the LASERCUT screen.
     in property <[LaserSessionRow]> laser-sessions;
     in-out property <bool> time-open: false;
     in-out property <string> time-id;
@@ -757,7 +757,7 @@ export component AppWindow inherits Window {
                         wrap: word-wrap;
                     }
                     if root.time-id == "laser" && root.laser-sessions.length > 0: Text {
-                        text: "YOUR SESSION ON THE LASER TIMER? TAP IT TO PAY:";
+                        text: "YOUR CUTS ON THE LASER TIMER? TAP EACH ONE TO ADD IT:";
                         color: Mk.inkt;
                         font-size: 16px;
                         font-weight: 800;
@@ -768,14 +768,14 @@ export component AppWindow inherits Window {
                             alignment: start;
                             spacing: 8px;
                             for s[i] in root.laser-sessions: Press {
-                                text: s.name + "  ·  " + s.minutes + " min  ·  " + s.price;
+                                text: s.name + "  ·  " + s.time;
                                 min-height: 64px;
                                 radius: 0px;
                                 font-size: 20px;
                                 fill: #A8401A;
                                 clicked => {
+                                    // Stays open: several cuts can be added; an added one leaves the list.
                                     root.action("session:" + i, 0);
-                                    root.time-open = false;
                                 }
                             }
                         }
@@ -809,7 +809,8 @@ export component AppWindow inherits Window {
                         }
                     }
                     Press {
-                        text: "CANCEL";
+                        // BACK, not CANCEL: cuts added above stay in the cart.
+                        text: "BACK";
                         radius: 0px;
                         fill: Mk.wit;
                         ink: Mk.inkt;

@@ -4,6 +4,7 @@
 
 use crate::backend::{Backend, LaserSession};
 use crate::cart::{filament_type, Cart, Part, Print, Tool, ToolTime};
+use crate::duration;
 use std::time::{Duration, Instant};
 
 /// Inactive carts are dropped after this long.
@@ -245,22 +246,33 @@ impl Machine {
         }
         let (per_minute, minimum) = be.tool_rate(tool);
         self.info(format!("{} added: {minutes} min", tool.label()));
-        self.cart.times.push(ToolTime { tool, minutes, per_minute, minimum, session: None });
+        self.cart.times.push(ToolTime { tool, minutes, per_minute, minimum, sessions: vec![], seconds: 0.0 });
         Ok(())
     }
 
-    /// Laser timer sessions to pay, without the ones already in this cart.
+    /// Laser timer cuts to pay, without the ones already in this cart.
     pub fn open_sessions(&self, be: &dyn Backend) -> Vec<LaserSession> {
-        let in_cart = |s: &LaserSession| self.cart.times.iter().any(|t| t.session.as_ref().is_some_and(|(id, _)| *id == s.id));
+        let in_cart = |s: &LaserSession| self.cart.times.iter().any(|t| t.sessions.iter().any(|(id, _)| *id == s.id));
         be.laser_sessions().into_iter().filter(|s| !in_cart(s)).collect()
     }
 
-    /// A laser timer session goes in the cart with its minutes, at the laser's price.
+    /// A laser timer cut goes in the cart at the laser's price. All cuts in the cart are one
+    /// line, rounded up to whole minutes once, as the stock app books them.
     fn add_session(&mut self, be: &dyn Backend, n: usize) -> Result<(), String> {
-        let s = self.open_sessions(be).into_iter().nth(n).ok_or("That laser session is gone. Try again.")?;
+        let s = self.open_sessions(be).into_iter().nth(n).ok_or("That laser cut is gone. Try again.")?;
         let (per_minute, minimum) = be.tool_rate(Tool::Laser);
-        self.info(format!("Laser session {} added: {} min", s.name, s.minutes));
-        self.cart.times.push(ToolTime { tool: Tool::Laser, minutes: s.minutes, per_minute, minimum, session: Some((s.id, s.name)) });
+        self.info(format!("{} added: {}", s.name, duration(s.seconds)));
+        let i = match self.cart.times.iter().position(|t| !t.sessions.is_empty()) {
+            Some(i) => i,
+            None => {
+                self.cart.times.push(ToolTime { tool: Tool::Laser, minutes: 0, per_minute, minimum, sessions: vec![], seconds: 0.0 });
+                self.cart.times.len() - 1
+            }
+        };
+        let t = &mut self.cart.times[i];
+        t.seconds += s.seconds;
+        t.minutes = ((t.seconds * 1000.0).round() / 1000.0 / 60.0).ceil() as u32;
+        t.sessions.push((s.id, s.name));
         Ok(())
     }
 
@@ -493,14 +505,17 @@ mod tests {
     }
 
     #[test]
-    fn a_laser_session_goes_in_once_with_its_minutes() {
+    fn laser_cuts_go_in_once_as_one_line_rounded_up_together() {
         let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
         m.handle(&be, Event::Button(Action::Session(0)), Instant::now());
-        assert_eq!(m.cart.times.len(), 1);
-        assert_eq!((m.cart.times[0].minutes, m.cart.times[0].session.as_ref().map(|s| s.1.as_str())), (12, Some("Ruben")));
-        assert!(m.open_sessions(&be).is_empty(), "a session in the cart is not offered again");
+        assert_eq!((m.cart.times.len(), m.cart.times[0].minutes), (1, 12));   // 700 s
+        assert_eq!(m.open_sessions(&be).len(), 1, "a cut in the cart is not offered again");
+        m.handle(&be, Event::Button(Action::Session(0)), Instant::now());   // the other cut, 70 s
+        assert_eq!(m.cart.times.len(), 1, "both cuts are one laser line");
+        // 770 s = 12:50 → 13 min; rounded per cut it would be 12 + 2 = 14.
+        assert_eq!((m.cart.times[0].minutes, m.cart.times[0].sessions.len()), (13, 2));
+        assert!(m.open_sessions(&be).is_empty());
         m.handle(&be, Event::Button(Action::Session(0)), Instant::now());
-        assert_eq!(m.cart.times.len(), 1);
         assert!(m.message.as_ref().unwrap().error);
         assert_eq!(crate::action_from("session:0", 0), Some(Action::Session(0)));
     }

@@ -345,12 +345,16 @@ fn tap_through_every_screen() {
     r.tap("ADD TO CART");
     assert_eq!(r.ui.get_total().as_str(), "€17.00");   // €2 + 30 min × €0.50, over the minimum
     assert_eq!(r.ui.get_rows().row_count(), 2);   // so no top-up row
-    // A session on the laser timer is paid with one tap, and is not offered twice.
+    // Cuts on the laser timer go in with one tap each, are not offered twice, and
+    // together are one laser line rounded up once: 11:40 + 1:10 = 12:50 → 13 min.
     r.tap("LASERCUT");
     r.shot("laser-sessions");
-    r.tap("Ruben  ·  12 min  ·  €6.00");
+    r.tap("Cut 14:32  ·  11:40");
     assert_eq!(r.ui.get_total().as_str(), "€23.00");
+    r.tap("Cut 14:50  ·  1:10");
+    assert_eq!(r.ui.get_total().as_str(), "€23.50");
     assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
+    r.tap("BACK");
     r.tap("VOLUNTEER DRINK");
     r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer(), "a volunteer's machine time is free, booked at €0");

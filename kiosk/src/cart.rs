@@ -117,8 +117,10 @@ pub struct ToolTime {
     pub minutes: u32,
     pub per_minute: f64,
     pub minimum: f64,
-    /// The laser timer's session this time comes from: (id, name). Marked paid after the sale.
-    pub session: Option<(String, String)>,
+    /// The laser timer's cuts this time comes from: (id, name). Marked paid after the sale.
+    pub sessions: Vec<(String, String)>,
+    /// Their laser seconds together; `minutes` is this rounded up once. 0 for typed-in time.
+    pub seconds: f64,
 }
 
 impl ToolTime {
@@ -268,7 +270,7 @@ mod tests {
     }
 
     fn job(minutes: u32) -> ToolTime {
-        ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, session: None }
+        ToolTime { tool: Tool::Laser, minutes, per_minute: 0.5, minimum: 5.0, sessions: vec![], seconds: 0.0 }
     }
 
     fn print(grams: u32) -> Print {

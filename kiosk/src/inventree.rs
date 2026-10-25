@@ -210,8 +210,8 @@ pub fn time_line(order: i64, t: &ToolTime, price: f64) -> Value {
     json!({
         "order": order,
         "reference": t.tool.reference(),
-        // The session's name, as the stock app books it; none = typed in at the till.
-        "description": t.session.as_ref().map_or("", |(_, name)| name.as_str()),
+        // The cuts' names, as the stock app books them; none = typed in at the till.
+        "description": t.sessions.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ").chars().take(120).collect::<String>(),
         "quantity": t.minutes,
         "price": format!("{:.4}", price / t.minutes as f64),
         "price_currency": "EUR",
@@ -425,8 +425,9 @@ impl Shared {
             .filter_map(|s| {
                 let id = s.get("id")?.as_str()?.to_string();
                 let minutes = s.get("minutes")?.as_u64()? as u32;
+                let seconds = s.get("total_time")?.as_f64()?;
                 let name = s.get("name")?.as_str()?.to_string();
-                (minutes > 0 && !skip.contains(&id)).then_some(LaserSession { id, name, minutes })
+                (minutes > 0 && !skip.contains(&id)).then_some(LaserSession { id, name, minutes, seconds })
             })
             .collect();
         *self.laser.write().unwrap() = sessions;
@@ -803,7 +804,7 @@ impl Backend for InvenTree {
         if cart.always_paid() {
             let order = sh.sell_services(cart)?;
             // The sale stands; a session the laser service could not take now is retried by poll_laser.
-            for (id, _) in cart.times.iter().filter_map(|t| t.session.as_ref()) {
+            for (id, _) in cart.times.iter().flat_map(|t| &t.sessions) {
                 if !sh.mark_laser_paid(id, &order) {
                     sh.laser_unmarked.lock().unwrap().push((id.clone(), order.clone()));
                 }
@@ -846,13 +847,13 @@ mod tests {
 
     #[test]
     fn lines_keep_quantity_and_book_their_share() {
-        let job = ToolTime { tool: Tool::Laser, minutes: 4, per_minute: 0.5, minimum: 5.0, session: None };
+        let job = ToolTime { tool: Tool::Laser, minutes: 4, per_minute: 0.5, minimum: 5.0, sessions: vec![], seconds: 0.0 };
         let l = time_line(7, &job, 5.0);
         assert_eq!((l["reference"].as_str(), l["quantity"].as_u64(), l["price"].as_str()), (Some("Lasertime"), Some(4), Some("1.2500")));
         let job = ToolTime { tool: Tool::Cnc, minutes: 30, ..job };
         assert_eq!((time_line(7, &job, 15.0)["reference"].as_str(), time_line(7, &job, 15.0)["price"].as_str()), (Some("CNC time"), Some("0.5000")));
-        let job = ToolTime { tool: Tool::Laser, session: Some(("s1".into(), "Ruben".into())), ..job };
-        assert_eq!(time_line(7, &job, 15.0)["description"].as_str(), Some("Ruben"));
+        let job = ToolTime { tool: Tool::Laser, sessions: vec![("s1".into(), "Cut 14:32".into()), ("s2".into(), "Cut 14:50".into())], ..job };
+        assert_eq!(time_line(7, &job, 15.0)["description"].as_str(), Some("Cut 14:32, Cut 14:50"));
         let print = Print { material: "PLA".into(), grams: 20, per_gram: 0.1, minimum: 5.0 };
         assert_eq!(print_line(7, &print, 2.5)["price"].as_str(), Some("0.1250"));
     }

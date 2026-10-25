@@ -24,6 +24,8 @@ pub struct LaserSession {
     pub id: String,
     pub name: String,
     pub minutes: u32,
+    /// The laser seconds on it: cuts in one cart are rounded up to minutes together.
+    pub seconds: f64,
 }
 
 /// Everything the state machine needs from the outside world. The real
@@ -202,7 +204,10 @@ impl Backend for Demo {
     }
 
     fn laser_sessions(&self) -> Vec<LaserSession> {
-        vec![LaserSession { id: "demo".into(), name: "Ruben".into(), minutes: 12 }]
+        vec![
+            LaserSession { id: "demo".into(), name: "Cut 14:32".into(), minutes: 12, seconds: 700.0 },
+            LaserSession { id: "demo2".into(), name: "Cut 14:50".into(), minutes: 2, seconds: 70.0 },
+        ]
     }
 
     fn checkout(&self, cart: &Cart) -> Result<(), String> {

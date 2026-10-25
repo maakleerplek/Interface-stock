@@ -63,11 +63,12 @@ export struct ToolRate {
     minimum: float,
 }
 
-/// An open laser timer session to pay at the kiosk.
+/// An open laser cut to pay at the kiosk.
 export struct LaserSessionRow {
     name: string,
     minutes: int,
-    price: string,
+    /// Laser time as 3:12.
+    time: string,
 }
 
 export struct ProductTile {
