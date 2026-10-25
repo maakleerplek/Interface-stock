@@ -138,8 +138,8 @@ pub struct View {
     pub filament_types: Vec<(i32, String, String)>,
     /// Machines for the minutes screen: (id, name, price per minute, minimum per payment).
     pub tools: Vec<(String, String, f32, f32)>,
-    /// Laser timer cuts to pay: (name, minutes, laser time as 3:12, ticked).
-    pub laser_sessions: Vec<(String, i32, String, bool)>,
+    /// Laser timer cuts to pay.
+    pub laser_sessions: Vec<CutView>,
     /// The ticked cuts together: (count, laser time as 3:12, price rounded up once).
     pub cuts_picked: (i32, String, String),
     pub cart_categories: String,
@@ -300,7 +300,15 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
         laser_sessions: m
             .open_sessions(be)
             .into_iter()
-            .map(|s| { let picked = m.picked_cuts.contains(&s.id); (s.name, s.minutes as i32, duration(s.seconds), picked) })
+            .map(|s| CutView {
+                picked: m.picked_cuts.contains(&s.id),
+                time: duration(s.seconds),
+                minutes: s.minutes as i32,
+                // "Cut 14:32" already says when; a LightBurn file name does not.
+                started: if s.name.starts_with("Cut ") { String::new() } else { s.started },
+                name: s.name,
+                preview: s.preview,
+            })
             .collect(),
         cuts_picked: {
             let picked: Vec<_> = m.open_sessions(be).into_iter().filter(|s| m.picked_cuts.contains(&s.id)).collect();
@@ -332,6 +340,19 @@ pub fn thumbnail(path: &Path) -> Option<slint::Image> {
             .or_insert_with(|| slint::Image::load_from_path(path).ok())
             .clone()
     })
+}
+
+/// One laser cut on the laser screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutView {
+    pub name: String,
+    pub minutes: i32,
+    /// Laser time as 3:12.
+    pub time: String,
+    pub picked: bool,
+    /// When it started, 14:32.
+    pub started: String,
+    pub preview: Option<PathBuf>,
 }
 
 pub fn action_from(name: &str, n: i32) -> Option<Action> {
@@ -487,7 +508,18 @@ macro_rules! define_ui_glue {
             let sessions: Vec<LaserSessionRow> = v
                 .laser_sessions
                 .into_iter()
-                .map(|(name, minutes, time, picked)| LaserSessionRow { name: name.into(), minutes, time: time.into(), picked })
+                .map(|c| {
+                    let preview = c.preview.as_deref().and_then(thumbnail);
+                    LaserSessionRow {
+                        name: c.name.into(),
+                        minutes: c.minutes,
+                        time: c.time.into(),
+                        picked: c.picked,
+                        started: c.started.into(),
+                        has_preview: preview.is_some(),
+                        preview: preview.unwrap_or_default(),
+                    }
+                })
                 .collect();
             ui.set_laser_sessions(ModelRc::new(VecModel::from(sessions)));
             ui.set_cuts_picked(v.cuts_picked.0);

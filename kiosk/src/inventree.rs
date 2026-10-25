@@ -427,10 +427,31 @@ impl Shared {
                 let minutes = s.get("minutes")?.as_u64()? as u32;
                 let seconds = s.get("total_time")?.as_f64()?;
                 let name = s.get("name")?.as_str()?.to_string();
-                (minutes > 0 && !skip.contains(&id)).then_some(LaserSession { id, name, minutes, seconds })
+                let started = s.get("created").and_then(Value::as_str).and_then(|c| c.get(11..16)).unwrap_or("").to_string();
+                let has_preview = s.get("has_preview").is_some_and(|v| v.as_u64() == Some(1) || v.as_bool() == Some(true));
+                let preview = if has_preview { self.cut_preview(&id) } else { None };
+                (minutes > 0 && !skip.contains(&id)).then_some(LaserSession { id, name, minutes, seconds, started, preview })
             })
             .collect();
         *self.laser.write().unwrap() = sessions;
+    }
+
+    /// Download a cut's LightBurn picture once into the image cache; it never changes.
+    fn cut_preview(&self, id: &str) -> Option<PathBuf> {
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;   // the id ends up in a file name
+        }
+        let file = self.cfg.image_dir.join(format!("cut_{id}.png"));
+        if file.exists() {
+            return Some(file);
+        }
+        let mut resp = self.agent.get(format!("{}/sessions/{id}/preview", self.cfg.laser_url)).call().ok().filter(|r| r.status() == 200)?;
+        let bytes = resp.body_mut().read_to_vec().ok()?;
+        std::fs::create_dir_all(&self.cfg.image_dir).ok()?;
+        let tmp = file.with_extension("tmp");
+        std::fs::write(&tmp, bytes).ok()?;
+        std::fs::rename(&tmp, &file).ok()?;
+        Some(file)
     }
 
     /// Tell the laser service the session is paid on `order`, like the stock app's checkout does.

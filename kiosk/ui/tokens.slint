@@ -71,6 +71,11 @@ export struct LaserSessionRow {
     time: string,
     /// Ticked on the laser screen.
     picked: bool,
+    /// When it started, 14:32.
+    started: string,
+    /// LightBurn's picture of the job.
+    preview: image,
+    has-preview: bool,
 }
 
 export struct ProductTile {

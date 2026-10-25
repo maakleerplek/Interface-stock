@@ -759,60 +759,93 @@ export component AppWindow inherits Window {
                         font-size: 18px;
                         wrap: word-wrap;
                     }
-                    Flickable {
+                    // Cuts as cards, four in a row: LightBurn's picture large, name, start and time under it.
+                    cards := Flickable {
                         vertical-stretch: 1;
-                        VerticalLayout {
-                            alignment: start;
-                            for s[i] in root.laser-sessions: Rectangle {
-                                height: 80px;
-                                background: s.picked ? #F6C9B4 : Mk.wit;
-                                border-width: 1px;
-                                border-color: Mk.lijn;
-                                HorizontalLayout {
-                                    padding-left: 18px;
-                                    padding-right: 22px;
-                                    spacing: 18px;
-                                    VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            width: 44px;
-                                            height: 44px;
-                                            background: s.picked ? Mk.inkt : Mk.wit;
-                                            border-width: 3px;
-                                            border-color: Mk.inkt;
-                                            if s.picked: Path {
-                                                width: 44px;
-                                                height: 44px;
-                                                viewbox-width: 44;
-                                                viewbox-height: 44;
-                                                commands: "M 10 22 L 19 31 L 34 13";
-                                                stroke: Mk.wit;
-                                                stroke-width: 5px;
-                                            }
-                                        }
-                                    }
-                                    Text {
-                                        horizontal-stretch: 1;
-                                        text: s.name;
-                                        color: Mk.inkt;
-                                        font-size: 24px;
-                                        font-weight: 700;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: s.time;
-                                        color: Mk.inkt;
-                                        font-size: 30px;
-                                        font-weight: 800;
-                                        vertical-alignment: center;
-                                    }
+                        property <int> per-row: 4;
+                        property <length> gap: 10px;
+                        property <length> card-w: (self.width - (self.per-row - 1) * self.gap) / self.per-row;
+                        property <length> card-h: self.card-w + 78px;
+                        viewport-height: ceil(root.laser-sessions.length / self.per-row) * (self.card-h + self.gap);
+                        for s[i] in root.laser-sessions: Rectangle {
+                            x: mod(i, cards.per-row) * (cards.card-w + cards.gap);
+                            y: floor(i / cards.per-row) * (cards.card-h + cards.gap);
+                            width: cards.card-w;
+                            height: cards.card-h;
+                            background: s.picked ? #FBE3D7 : Mk.wit;
+                            border-width: s.picked ? 4px : 2px;
+                            border-color: s.picked ? #A8401A : Mk.lijn;
+                            Rectangle {
+                                x: 4px;
+                                y: 4px;
+                                width: parent.width - 8px;
+                                height: parent.width - 8px;
+                                background: Mk.beton;
+                                if s.has-preview: Image {
+                                    x: 6px;
+                                    y: 6px;
+                                    width: parent.width - 12px;
+                                    height: parent.height - 12px;
+                                    source: s.preview;
+                                    image-fit: contain;
                                 }
-                                TouchArea {
-                                    accessible-role: button;
-                                    accessible-label: s.name + "  ·  " + s.time;
-                                    clicked => { root.action("cut:" + i, 0); }
+                                if !s.has-preview: Text {
+                                    text: "NO PICTURE";
+                                    color: Mk.lijn;
+                                    font-size: 16px;
+                                    font-weight: 800;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
                                 }
+                            }
+                            // The tick, in the top-left corner of the picture.
+                            Rectangle {
+                                x: 12px;
+                                y: 12px;
+                                width: 40px;
+                                height: 40px;
+                                background: s.picked ? Mk.inkt : Mk.wit;
+                                border-width: 3px;
+                                border-color: Mk.inkt;
+                                if s.picked: Path {
+                                    width: 40px;
+                                    height: 40px;
+                                    viewbox-width: 40;
+                                    viewbox-height: 40;
+                                    commands: "M 9 20 L 17 28 L 31 12";
+                                    stroke: Mk.wit;
+                                    stroke-width: 5px;
+                                }
+                            }
+                            Text {
+                                x: 10px;
+                                y: parent.width + 2px;
+                                width: parent.width - 20px;
+                                text: s.name;
+                                color: Mk.inkt;
+                                font-size: 18px;
+                                font-weight: 700;
+                                overflow: elide;
+                            }
+                            Text {
+                                x: 10px;
+                                y: parent.width + 34px;
+                                text: s.started;
+                                color: Mk.grafiet;
+                                font-size: 16px;
+                            }
+                            Text {
+                                x: parent.width - self.width - 10px;
+                                y: parent.width + 26px;
+                                text: s.time;
+                                color: Mk.inkt;
+                                font-size: 26px;
+                                font-weight: 800;
+                            }
+                            TouchArea {
+                                accessible-role: button;
+                                accessible-label: s.name + "  ·  " + s.time;
+                                clicked => { root.action("cut:" + i, 0); }
                             }
                         }
                     }

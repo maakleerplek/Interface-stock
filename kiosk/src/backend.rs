@@ -26,6 +26,10 @@ pub struct LaserSession {
     pub minutes: u32,
     /// The laser seconds on it: cuts in one cart are rounded up to minutes together.
     pub seconds: f64,
+    /// When the cut started, 14:32.
+    pub started: String,
+    /// LightBurn's picture of the job, downloaded into the image cache.
+    pub preview: Option<std::path::PathBuf>,
 }
 
 /// Everything the state machine needs from the outside world. The real
@@ -205,8 +209,9 @@ impl Backend for Demo {
 
     fn laser_sessions(&self) -> Vec<LaserSession> {
         vec![
-            LaserSession { id: "demo".into(), name: "Cut 14:32".into(), minutes: 12, seconds: 700.0 },
-            LaserSession { id: "demo2".into(), name: "Cut 14:50".into(), minutes: 2, seconds: 70.0 },
+            // The pictures sit in the source tree: there for the UI test and --demo on a dev machine, none elsewhere.
+            LaserSession { id: "demo".into(), name: "Cut 14:32".into(), minutes: 12, seconds: 700.0, started: "14:32".into(), preview: demo_picture("demo-cut-1.png") },
+            LaserSession { id: "demo2".into(), name: "Cut 14:50".into(), minutes: 2, seconds: 70.0, started: "14:50".into(), preview: demo_picture("demo-cut-2.png") },
         ]
     }
 
@@ -226,4 +231,8 @@ impl Backend for Demo {
         }
         Ok(())
     }
+}
+
+fn demo_picture(name: &str) -> Option<std::path::PathBuf> {
+    Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(name)).filter(|p| p.exists())
 }
