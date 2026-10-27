@@ -105,6 +105,11 @@ pub struct RowData {
     pub name: String,
     pub qty: i32,
     pub price: String,
+    /// "3 × €2.00" when there is more than one, else empty.
+    pub each: String,
+    /// Shown on the card when there is no picture; empty for prints and machine time.
+    pub initials: String,
+    pub image: Option<PathBuf>,
     pub deep: Color,
     /// A 3D print or machine job: no + on its row.
     pub whole: bool,
@@ -142,19 +147,20 @@ pub struct View {
     pub laser_sessions: Vec<CutView>,
     /// The ticked cuts together: (count, laser time as 3:12, price rounded up once).
     pub cuts_picked: (i32, String, String),
-    pub cart_categories: String,
     pub done_summary: String,
 }
 
 fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> View {
     let price = |p: &cart::Part| be.price(p);
+    // The thank-you screen still lists what the volunteer took; the cart itself is already empty.
+    let cart = if m.state == State::VolunteerDone { &m.done_cart } else { &m.cart };
     // + 0.0: an empty f64 sum is -0.0, which prints as "€-0.00".
-    let total = m.cart.total(price) + 0.0;
-    let mut cats: Vec<String> = m.cart.items.iter().map(|(p, _)| be.category(p)).collect();
-    if !m.cart.prints.is_empty() {
+    let total = cart.total(price) + 0.0;
+    let mut cats: Vec<String> = cart.items.iter().map(|(p, _)| be.category(p)).collect();
+    if !cart.prints.is_empty() {
         cats.push("3d print".into());
     }
-    cats.extend(m.cart.times.iter().map(|t| t.tool.label().to_lowercase()));
+    cats.extend(cart.times.iter().map(|t| t.tool.label().to_lowercase()));
     cats.sort();
     cats.dedup();
     let qr = (m.state == State::QrDisplay)
@@ -229,53 +235,63 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
         })
         .collect();
 
-    let (done_units, done_total) = m.done_summary;
     View {
         state: m.state,
         message: m.message.as_ref().map(|x| x.text.clone()).unwrap_or_default(),
         message_error: m.message.as_ref().is_some_and(|x| x.error),
         searching: searching.into(),
-        rows: m
-            .cart
+        rows: cart
             .items
             .iter()
             .map(|(p, q)| RowData {
                 name: p.name.clone(),
                 qty: *q as i32,
                 price: format_price(price(p) * *q as f64),
+                each: if *q > 1 { format!("{q} × {}", format_price(price(p))) } else { String::new() },
+                initials: initials(&p.name),
+                image: catalog.iter().find(|c| c.part.pk == p.pk).and_then(|c| c.image.clone()),
                 deep: category_colors(&be.category(p)).1,
                 whole: false,
                 fixed: false,
             })
-            .chain(m.cart.prints.iter().map(|p| RowData {
+            .chain(cart.prints.iter().map(|p| RowData {
                 name: if p.material.is_empty() { format!("3D print · {} g", p.grams) } else { format!("3D print · {} · {} g", p.material, p.grams) },
                 qty: 1,
                 price: format_price(p.price()),
+                each: String::new(),
+                initials: String::new(),
+                image: None,
                 deep: category_colors("filament").1,
                 whole: true,
                 fixed: false,
             }))
-            .chain(m.cart.times.iter().map(|t| RowData {
+            .chain(cart.times.iter().map(|t| RowData {
                 name: format!("{} · {} min", t.tool.label(), t.minutes),
                 qty: 1,
                 price: format_price(t.price()),
+                each: String::new(),
+                initials: String::new(),
+                image: None,
                 deep: category_colors(t.tool.label()).1,
                 whole: true,
                 fixed: false,
             }))
-            .chain((m.cart.top_up() > 0.0).then(|| RowData {
+            .chain((cart.top_up() > 0.0).then(|| RowData {
                 // Topped up, the machine lines add up to exactly the minimum.
-                name: format!("Minimum {}", format_price({ let (p, t) = m.cart.machine_prices(); p.iter().chain(&t).sum() })),
+                name: format!("Minimum {}", format_price({ let (p, t) = cart.machine_prices(); p.iter().chain(&t).sum() })),
                 qty: 1,
-                price: format_price(m.cart.top_up()),
+                price: format_price(cart.top_up()),
+                each: String::new(),
+                initials: String::new(),
+                image: None,
                 deep: category_colors("all").1,
                 whole: true,
                 fixed: true,
             }))
             .collect(),
-        units: m.cart.units() as i32,
+        units: cart.units() as i32,
         total: format!("€{total:.2}"),
-        volunteer: m.cart.volunteer,
+        volunteer: cart.volunteer,
         qr,
         categories: std::iter::once(ALL.to_string())
             .chain(categories)
@@ -316,11 +332,11 @@ fn build_view(m: &Machine, be: &dyn Backend, cfg: &Config, searching: &str) -> V
             let minutes = ((seconds * 1000.0).round() / 1000.0 / 60.0).ceil();
             (picked.len() as i32, duration(seconds), format!("€{:.2}", minutes * be.tool_rate(cart::Tool::Laser).0))
         },
-        cart_categories: cats.join(" / ").to_uppercase(),
         done_summary: format!(
-            "{done_units} item{} · {}",
-            if done_units == 1 { "" } else { "s" },
-            format_price(done_total)
+            "{} item{} · {}",
+            cart.units(),
+            if cart.units() == 1 { "" } else { "s" },
+            format_price(total)
         ),
     }
 }
@@ -397,187 +413,192 @@ pub fn action_from(name: &str, n: i32) -> Option<Action> {
     })
 }
 
-/// Defines `apply`, `refilter` and `wire` for the `AppWindow` in scope.
-/// Every `.slint` design compiles to its own Rust types, so the app and
-/// each design template instantiate this once.
-#[macro_export]
-macro_rules! define_ui_glue {
-    () => {
-        pub fn apply(ui: &AppWindow, v: $crate::View) {
-            use $crate::slint::{ModelRc, VecModel};
-            use $crate::state::State;
-            ui.set_screen(match v.state {
-                State::Idle | State::Shopping => Screen::Shop,
-                State::CancelConfirm => Screen::CancelConfirm,
-                State::CheckoutConfirm => Screen::CheckoutConfirm,
-                State::Processing => Screen::Processing,
-                State::QrDisplay => Screen::Qr,
-                State::PayConfirm => Screen::PayConfirm,
-                State::VolunteerDone => Screen::VolunteerDone,
-            });
-            ui.set_message(v.message.into());
-            ui.set_message_error(v.message_error);
-            ui.set_searching(v.searching.into());
-            let rows: Vec<CartRow> = v
-                .rows
-                .into_iter()
-                .map(|r| CartRow { name: r.name.into(), qty: r.qty, price: r.price.into(), deep: r.deep, whole: r.whole, fixed: r.fixed })
-                .collect();
-            ui.set_rows(ModelRc::new(VecModel::from(rows)));
-            ui.set_units(v.units);
-            ui.set_total(v.total.into());
-            ui.set_volunteer(v.volunteer);
-            if let Some(px) = v.qr {
-                ui.set_qr($crate::slint::Image::from_rgb8(px));
+pub fn apply(ui: &AppWindow, v: crate::View) {
+    use crate::slint::{ModelRc, VecModel};
+    use crate::state::State;
+    ui.set_screen(match v.state {
+        State::Idle | State::Shopping => Screen::Shop,
+        State::CancelConfirm => Screen::CancelConfirm,
+        State::CheckoutConfirm => Screen::CheckoutConfirm,
+        State::Processing => Screen::Processing,
+        State::QrDisplay => Screen::Qr,
+        State::PayConfirm => Screen::PayConfirm,
+        State::VolunteerDone => Screen::VolunteerDone,
+    });
+    ui.set_message(v.message.into());
+    ui.set_message_error(v.message_error);
+    ui.set_searching(v.searching.into());
+    let rows: Vec<CartRow> = v
+        .rows
+        .into_iter()
+        .map(|r| {
+            let image = r.image.and_then(|p| crate::thumbnail(&p));
+            CartRow {
+                name: r.name.into(),
+                qty: r.qty,
+                price: r.price.into(),
+                each: r.each.into(),
+                initials: r.initials.into(),
+                has_image: image.is_some(),
+                image: image.unwrap_or_default(),
+                deep: r.deep,
+                whole: r.whole,
+                fixed: r.fixed,
             }
-            if !v.categories.iter().any(|c| c.name == ui.get_category().as_str()) {
-                ui.set_category($crate::ALL.into());
+        })
+        .collect();
+    ui.set_rows(ModelRc::new(VecModel::from(rows)));
+    ui.set_units(v.units);
+    ui.set_total(v.total.into());
+    ui.set_volunteer(v.volunteer);
+    if let Some(px) = v.qr {
+        ui.set_qr(crate::slint::Image::from_rgb8(px));
+    }
+    if !v.categories.iter().any(|c| c.name == ui.get_category().as_str()) {
+        ui.set_category(crate::ALL.into());
+    }
+    let cats: Vec<Category> = v
+        .categories
+        .into_iter()
+        .map(|c| Category { name: c.name.into(), light: c.light, deep: c.deep })
+        .collect();
+    ui.set_categories(ModelRc::new(VecModel::from(cats)));
+    let tiles: Vec<ProductTile> = v
+        .catalog
+        .into_iter()
+        .map(|t| {
+            let image = t.image.and_then(|p| crate::thumbnail(&p));
+            ProductTile {
+                pk: t.pk,
+                name: t.name.into(),
+                price: t.price.into(),
+                initials: t.initials.into(),
+                light: t.light,
+                deep: t.deep,
+                sold_out: t.sold_out,
+                category: t.category.into(),
+                in_cart: t.in_cart,
+                has_image: image.is_some(),
+                image: image.unwrap_or_default(),
             }
-            let cats: Vec<Category> = v
-                .categories
-                .into_iter()
-                .map(|c| Category { name: c.name.into(), light: c.light, deep: c.deep })
-                .collect();
-            ui.set_categories(ModelRc::new(VecModel::from(cats)));
-            let tiles: Vec<ProductTile> = v
-                .catalog
-                .into_iter()
-                .map(|t| {
-                    let image = t.image.and_then(|p| $crate::thumbnail(&p));
-                    ProductTile {
-                        pk: t.pk,
-                        name: t.name.into(),
-                        price: t.price.into(),
-                        initials: t.initials.into(),
-                        light: t.light,
-                        deep: t.deep,
-                        sold_out: t.sold_out,
-                        category: t.category.into(),
-                        in_cart: t.in_cart,
-                        has_image: image.is_some(),
-                        image: image.unwrap_or_default(),
-                    }
-                })
-                .collect();
-            ui.set_all_products(ModelRc::new(VecModel::from(tiles)));
-            let filaments: Vec<ProductTile> = v
-                .filaments
-                .into_iter()
-                .map(|t| {
-                    let image = t.image.and_then(|p| $crate::thumbnail(&p));
-                    ProductTile {
-                        pk: t.pk,
-                        name: t.name.into(),
-                        price: t.price.into(),
-                        initials: t.initials.into(),
-                        light: t.light,
-                        deep: t.deep,
-                        sold_out: false,
-                        category: t.category.into(),
-                        in_cart: 0,
-                        has_image: image.is_some(),
-                        image: image.unwrap_or_default(),
-                    }
-                })
-                .collect();
-            ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
-            let types: Vec<ProductTile> = v
-                .filament_types
-                .into_iter()
-                .map(|(pk, name, price)| ProductTile {
-                    pk,
-                    name: name.clone().into(),
-                    price: price.into(),
-                    initials: Default::default(),
-                    light: Default::default(),
-                    deep: Default::default(),
-                    sold_out: false,
-                    category: name.into(),
-                    in_cart: 0,
-                    has_image: false,
-                    image: Default::default(),
-                })
-                .collect();
-            ui.set_filament_types(ModelRc::new(VecModel::from(types)));
-            let tools: Vec<ToolRate> = v
-                .tools
-                .into_iter()
-                .map(|(id, name, per_minute, minimum)| ToolRate { id: id.into(), name: name.into(), per_minute, minimum })
-                .collect();
-            ui.set_tools(ModelRc::new(VecModel::from(tools)));
-            let sessions: Vec<LaserSessionRow> = v
-                .laser_sessions
-                .into_iter()
-                .map(|c| {
-                    let preview = c.preview.as_deref().and_then(thumbnail);
-                    LaserSessionRow {
-                        name: c.name.into(),
-                        minutes: c.minutes,
-                        time: c.time.into(),
-                        picked: c.picked,
-                        started: c.started.into(),
-                        has_preview: preview.is_some(),
-                        preview: preview.unwrap_or_default(),
-                    }
-                })
-                .collect();
-            ui.set_laser_sessions(ModelRc::new(VecModel::from(sessions)));
-            ui.set_cuts_picked(v.cuts_picked.0);
-            ui.set_cuts_picked_time(v.cuts_picked.1.into());
-            ui.set_cuts_picked_price(v.cuts_picked.2.into());
-            ui.set_cart_categories(v.cart_categories.into());
-            ui.set_done_summary(v.done_summary.into());
-            refilter(ui);
-            refilter_colours(ui);
-        }
+        })
+        .collect();
+    ui.set_all_products(ModelRc::new(VecModel::from(tiles)));
+    let filaments: Vec<ProductTile> = v
+        .filaments
+        .into_iter()
+        .map(|t| {
+            let image = t.image.and_then(|p| crate::thumbnail(&p));
+            ProductTile {
+                pk: t.pk,
+                name: t.name.into(),
+                price: t.price.into(),
+                initials: t.initials.into(),
+                light: t.light,
+                deep: t.deep,
+                sold_out: false,
+                category: t.category.into(),
+                in_cart: 0,
+                has_image: image.is_some(),
+                image: image.unwrap_or_default(),
+            }
+        })
+        .collect();
+    ui.set_filaments(ModelRc::new(VecModel::from(filaments)));
+    let types: Vec<ProductTile> = v
+        .filament_types
+        .into_iter()
+        .map(|(pk, name, price)| ProductTile {
+            pk,
+            name: name.clone().into(),
+            price: price.into(),
+            initials: Default::default(),
+            light: Default::default(),
+            deep: Default::default(),
+            sold_out: false,
+            category: name.into(),
+            in_cart: 0,
+            has_image: false,
+            image: Default::default(),
+        })
+        .collect();
+    ui.set_filament_types(ModelRc::new(VecModel::from(types)));
+    let tools: Vec<ToolRate> = v
+        .tools
+        .into_iter()
+        .map(|(id, name, per_minute, minimum)| ToolRate { id: id.into(), name: name.into(), per_minute, minimum })
+        .collect();
+    ui.set_tools(ModelRc::new(VecModel::from(tools)));
+    let sessions: Vec<LaserSessionRow> = v
+        .laser_sessions
+        .into_iter()
+        .map(|c| {
+            let preview = c.preview.as_deref().and_then(thumbnail);
+            LaserSessionRow {
+                name: c.name.into(),
+                minutes: c.minutes,
+                time: c.time.into(),
+                picked: c.picked,
+                started: c.started.into(),
+                has_preview: preview.is_some(),
+                preview: preview.unwrap_or_default(),
+            }
+        })
+        .collect();
+    ui.set_laser_sessions(ModelRc::new(VecModel::from(sessions)));
+    ui.set_cuts_picked(v.cuts_picked.0);
+    ui.set_cuts_picked_time(v.cuts_picked.1.into());
+    ui.set_cuts_picked_price(v.cuts_picked.2.into());
+    ui.set_done_summary(v.done_summary.into());
+    refilter(ui);
+    refilter_colours(ui);
+}
 
-        /// The 3D-print screen: only the colours of the chosen filament type.
-        pub fn refilter_colours(ui: &AppWindow) {
-            use $crate::slint::{Model, ModelRc, VecModel};
-            let kind = ui.get_print_type();
-            let tiles: Vec<ProductTile> = ui.get_filaments().iter().filter(|t| t.category == kind).collect();
-            ui.set_print_colours(ModelRc::new(VecModel::from(tiles)));
-        }
+/// The 3D-print screen: only the colours of the chosen filament type.
+pub fn refilter_colours(ui: &AppWindow) {
+    use crate::slint::{Model, ModelRc, VecModel};
+    let kind = ui.get_print_type();
+    let tiles: Vec<ProductTile> = ui.get_filaments().iter().filter(|t| t.category == kind).collect();
+    ui.set_print_colours(ModelRc::new(VecModel::from(tiles)));
+}
 
-        /// Show only the tiles of the selected category.
-        pub fn refilter(ui: &AppWindow) {
-            use $crate::slint::{Model, ModelRc, VecModel};
-            let cat = ui.get_category();
-            let tiles: Vec<ProductTile> = ui
-                .get_all_products()
-                .iter()
-                .filter(|t| cat == $crate::ALL || t.category == cat)
-                .collect();
-            ui.set_products(ModelRc::new(VecModel::from(tiles)));
-        }
+/// Show only the tiles of the selected category.
+pub fn refilter(ui: &AppWindow) {
+    use crate::slint::{Model, ModelRc, VecModel};
+    let cat = ui.get_category();
+    let tiles: Vec<ProductTile> = ui
+        .get_all_products()
+        .iter()
+        .filter(|t| cat == crate::ALL || t.category == cat)
+        .collect();
+    ui.set_products(ModelRc::new(VecModel::from(tiles)));
+}
 
-        /// Connect the window's callbacks to an event sink and the category tabs.
-        pub fn wire(ui: &AppWindow, send: impl Fn($crate::state::Event) + Clone + 'static) {
-            use $crate::slint::ComponentHandle;
-            use $crate::state::Event;
-            let s = send.clone();
-            ui.on_action(move |name, n| {
-                if let Some(a) = $crate::action_from(&name, n) {
-                    s(Event::Button(a));
-                }
-            });
-            ui.on_pick(move |pk| send(Event::Pick(pk as i64)));
-            let weak = ui.as_weak();
-            ui.on_select_category(move |cat| {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_category(cat);
-                    refilter(&ui);
-                }
-            });
-            let weak = ui.as_weak();
-            ui.on_select_print_type(move |kind| {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_print_type(kind);
-                    refilter_colours(&ui);
-                }
-            });
+/// Connect the window's callbacks to an event sink and the category tabs.
+pub fn wire(ui: &AppWindow, send: impl Fn(crate::state::Event) + Clone + 'static) {
+    use crate::slint::ComponentHandle;
+    use crate::state::Event;
+    let s = send.clone();
+    ui.on_action(move |name, n| {
+        if let Some(a) = crate::action_from(&name, n) {
+            s(Event::Button(a));
         }
-    };
+    });
+    ui.on_pick(move |pk| send(Event::Pick(pk as i64)));
+    let weak = ui.as_weak();
+    ui.on_select_category(move |cat| {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_category(cat);
+            refilter(&ui);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_select_print_type(move |kind| {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_print_type(kind);
+            refilter_colours(&ui);
+        }
+    });
 }
 
 /// State machine plus backend. Runs on the worker thread in the app and
@@ -663,4 +684,3 @@ impl Kiosk {
     }
 }
 
-define_ui_glue!();

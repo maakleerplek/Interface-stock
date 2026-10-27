@@ -48,6 +48,11 @@ export struct CartRow {
     name: string,
     qty: int,
     price: string,
+    /// "3 × €2.00" when qty > 1.
+    each: string,
+    initials: string,
+    image: image,
+    has-image: bool,
     deep: color,
     /// A 3D print or machine job: it leaves the cart as a whole, so no +.
     whole: bool,

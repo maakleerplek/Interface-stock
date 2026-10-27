@@ -223,6 +223,103 @@ component Entries inherits Rectangle {
     }
 }
 
+// What you are paying for (or took as a volunteer): one card per cart line, read-only.
+component PaidCards inherits Rectangle {
+    in property <[CartRow]> rows;
+    property <int> cols: 3;
+    property <length> gap: 12px;
+    property <length> card-w: (root.width - (root.cols - 1) * root.gap) / root.cols;
+    property <length> card-h: 156px;
+    clip: true;
+
+    flick := Flickable {
+        content-height: ceil(root.rows.length / root.cols) * (root.card-h + root.gap) - root.gap;
+        for row[i] in root.rows: Rectangle {
+            x: mod(i, root.cols) * (root.card-w + root.gap);
+            y: floor(i / root.cols) * (root.card-h + root.gap);
+            width: root.card-w;
+            height: root.card-h;
+            background: Mk.wit;
+            border-width: 1px;
+            border-color: Mk.lijn;
+            clip: true;
+            Rectangle { y: 0; height: 8px; background: row.deep; }
+            VerticalLayout {
+                padding: 10px;
+                padding-top: 14px;
+                spacing: 4px;
+                Rectangle {
+                    height: 48px;
+                    if row.has-image: Image {
+                        height: parent.height;
+                        width: parent.width;
+                        source: row.image;
+                        image-fit: contain;
+                    }
+                    if !row.has-image: Text {
+                        text: row.initials;
+                        color: row.deep;
+                        font-family: Mk.serif;
+                        font-size: 32px;
+                        font-weight: 700;
+                    }
+                }
+                Text {
+                    text: row.name;
+                    color: Mk.inkt;
+                    font-size: 15px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                    overflow: elide;
+                    height: 38px;
+                    vertical-alignment: top;
+                }
+                HorizontalLayout {
+                    Text {
+                        text: row.each;
+                        color: Mk.grafiet;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: row.price;
+                        color: Mk.inkt;
+                        font-family: Mk.serif;
+                        font-size: 22px;
+                        font-weight: 700;
+                    }
+                }
+            }
+            if row.qty > 1: Rectangle {
+                x: parent.width - 44px;
+                y: 8px;
+                width: 44px;
+                height: 36px;
+                background: row.deep;
+                Text {
+                    text: "×" + row.qty;
+                    color: Mk.wit;
+                    font-size: 18px;
+                    font-weight: 800;
+                }
+            }
+        }
+    }
+
+    if flick.content-height > flick.height && -flick.content-y < flick.content-height - flick.height - 1px: Rectangle {
+        y: parent.height - 28px;
+        height: 28px;
+        background: Mk.beton-donker;
+        Text {
+            text: "MORE ↓";
+            color: Mk.grafiet;
+            font-size: 14px;
+            font-weight: 800;
+        }
+    }
+}
+
 // Agenda entry: coloured left column with the title, white content right.
 component Entry inherits Rectangle {
     in property <string> kicker;
@@ -280,7 +377,6 @@ export component AppWindow inherits Window {
     in property <string> total;
     in property <bool> volunteer;
     in property <image> qr;
-    in property <string> cart-categories;
     in property <string> done-summary;
     in property <[Category]> categories;
     in-out property <string> category: "ALL";
@@ -766,7 +862,7 @@ export component AppWindow inherits Window {
                         property <length> gap: 10px;
                         property <length> card-w: (self.width - (self.per-row - 1) * self.gap) / self.per-row;
                         property <length> card-h: self.card-w + 78px;
-                        viewport-height: ceil(root.laser-sessions.length / self.per-row) * (self.card-h + self.gap);
+                        content-height: ceil(root.laser-sessions.length / self.per-row) * (self.card-h + self.gap);
                         for s[i] in root.laser-sessions: Rectangle {
                             x: mod(i, cards.per-row) * (cards.card-w + cards.gap);
                             y: floor(i / cards.per-row) * (cards.card-h + cards.gap);
@@ -1095,27 +1191,21 @@ export component AppWindow inherits Window {
             deep: Mk.workshop-diep;
             HorizontalLayout {
                 padding: 32px;
-                spacing: 32px;
-                Image {
-                    width: 440px;
-                    source: root.qr;
-                    image-fit: contain;
-                    image-rendering: pixelated;
-                }
+                spacing: 24px;
                 VerticalLayout {
-                    alignment: end;
-                    spacing: 16px;
-                    Text {
-                        text: "Scan with Wero or your banking app. The amount is filled in.";
-                        color: Mk.inkt;
-                        font-size: 22px;
-                        wrap: word-wrap;
+                    width: 300px;
+                    spacing: 12px;
+                    Image {
+                        height: 300px;
+                        source: root.qr;
+                        image-fit: contain;
+                        image-rendering: pixelated;
                     }
                     Text {
-                        text: root.cart-categories;
-                        color: Mk.grafiet;
-                        font-size: 14px;
-                        font-weight: 800;
+                        vertical-stretch: 1;
+                        text: "Scan with Wero or your banking app. The amount is filled in.";
+                        color: Mk.inkt;
+                        font-size: 20px;
                         wrap: word-wrap;
                     }
                     Press {
@@ -1127,6 +1217,10 @@ export component AppWindow inherits Window {
                         weight: 800;
                         clicked => { root.action("confirm", 0); }
                     }
+                }
+                PaidCards {
+                    horizontal-stretch: 1;
+                    rows: root.rows;
                 }
             }
         }
@@ -1179,13 +1273,20 @@ export component AppWindow inherits Window {
             title: "Booked as volunteer use. Enjoy!";
             light: Mk.openlab;
             deep: Mk.openlab-diep;
-            Text {
-                x: 48px;
-                text: root.done-summary + " — on the house";
-                color: Mk.openlab-diep;
-                font-family: Mk.serif;
-                font-size: 40px;
-                font-weight: 700;
+            VerticalLayout {
+                padding: 32px;
+                spacing: 16px;
+                PaidCards {
+                    vertical-stretch: 1;
+                    rows: root.rows;
+                }
+                Text {
+                    text: root.done-summary + " — on the house";
+                    color: Mk.openlab-diep;
+                    font-family: Mk.serif;
+                    font-size: 34px;
+                    font-weight: 700;
+                }
             }
         }
     }

@@ -1,6 +1,5 @@
-//! The real backend: InvenTree's REST API. Port of the API part of
-//! `barcode_inventree.py` (lookups, stock levels, sale prices, stock
-//! removal, barcode cache) plus a cached product catalog for the grid.
+//! The real backend: InvenTree's REST API: lookups, stock levels, sale prices, stock
+//! removal, barcode cache, plus a cached product catalog for the grid.
 
 use crate::backend::{Backend, CatalogItem, LaserSession, StockLookupError, DEFAULT_MINIMUM, DEFAULT_PRINT_PRICE, DEFAULT_TOOL_PRICE};
 use crate::cart::{Cart, Part, Print, Tool, ToolTime};

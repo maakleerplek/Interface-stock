@@ -1,9 +1,0 @@
-RPi.GPIO
-spidev
-Pillow
-numpy
-lgpio
-requests
-python-dotenv
-evdev
-qrcode[pil]

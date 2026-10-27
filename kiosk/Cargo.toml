@@ -27,11 +27,3 @@ strip = true
 [dev-dependencies]
 i-slint-backend-testing = "=1.18.1"
 png = "0.17"
-
-[features]
-# Builds the design templates in ui/templates/ for examples/templates.rs.
-templates = []
-
-[[example]]
-name = "templates"
-required-features = ["templates"]

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs (or refreshes) the kiosk watchdog timer. Called by install.sh and
+# Installs (or refreshes) the kiosk watchdog timer. Called by pi/setup.sh and
 # deploy.sh, so a change here reaches the Pi with the next deploy.
 set -e
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

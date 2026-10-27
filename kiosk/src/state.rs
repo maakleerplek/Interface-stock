@@ -110,8 +110,8 @@ pub struct Machine {
     pub message: Option<Message>,
     /// Last part that was added, shown large on the shopping screen.
     pub last_part: Option<Part>,
-    /// Units and total of the volunteer checkout that just finished.
-    pub done_summary: (u32, f64),
+    /// The volunteer checkout that just finished, shown on the thank-you screen.
+    pub done_cart: Cart,
     /// Laser cuts ticked on the laser screen, by session id. Unticking or leaving removes nothing.
     pub picked_cuts: Vec<String>,
     last_interaction: Instant,
@@ -126,7 +126,7 @@ impl Machine {
             cart: Cart::default(),
             message: None,
             last_part: None,
-            done_summary: (0, 0.0),
+            done_cart: Cart::default(),
             picked_cuts: vec![],
             last_interaction: now,
             entered: now,
@@ -461,13 +461,12 @@ impl Machine {
         self.last_interaction = now;
         match be.checkout(&self.cart) {
             Ok(()) if self.cart.volunteer => {
-                self.done_summary = (self.cart.units(), self.cart.total(|p| be.price(p)));
+                self.done_cart = self.cart.clone();
                 self.reset(now);
                 self.go(State::VolunteerDone, now);
             }
             Ok(()) => {
                 self.go(State::QrDisplay, now);
-                self.info("Stock removed!");
             }
             Err(e) => {
                 self.go(State::Shopping, now);
@@ -626,7 +625,7 @@ mod tests {
         assert!(!m.cart.volunteer);
         run(&mut m, &be, &["COLA", "VOLUNTEER", "CONFIRM", "CONFIRM"]);
         assert_eq!(m.state, State::VolunteerDone);
-        assert_eq!(m.done_summary.0, 1);
+        assert_eq!(m.done_cart.units(), 1);
         assert!(m.cart.is_empty());
         assert!(m.tick(Instant::now() + VOLUNTEER_DONE_FOR));
         assert_eq!(m.state, State::Idle);
