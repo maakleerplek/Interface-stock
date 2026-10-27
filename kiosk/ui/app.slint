@@ -223,100 +223,55 @@ component Entries inherits Rectangle {
     }
 }
 
-// What you are paying for (or took as a volunteer): one card per cart line, read-only.
-component PaidCards inherits Rectangle {
+// What you are paying for (or took as a volunteer): one row per cart line, read-only.
+component PaidList inherits Rectangle {
     in property <[CartRow]> rows;
-    property <int> cols: 3;
-    property <length> gap: 12px;
-    property <length> card-w: (root.width - (root.cols - 1) * root.gap) / root.cols;
-    property <length> card-h: 156px;
+    property <length> row-h: 64px;
     clip: true;
-
     flick := Flickable {
-        content-height: ceil(root.rows.length / root.cols) * (root.card-h + root.gap) - root.gap;
+        content-height: root.rows.length * root.row-h;
         for row[i] in root.rows: Rectangle {
-            x: mod(i, root.cols) * (root.card-w + root.gap);
-            y: floor(i / root.cols) * (root.card-h + root.gap);
-            width: root.card-w;
-            height: root.card-h;
-            background: Mk.wit;
-            border-width: 1px;
-            border-color: Mk.lijn;
-            clip: true;
-            Rectangle { y: 0; height: 8px; background: row.deep; }
-            VerticalLayout {
-                padding: 10px;
-                padding-top: 14px;
-                spacing: 4px;
+            y: i * root.row-h;
+            height: root.row-h - 6px;
+            background: Mk.beton;
+            Rectangle { x: 0; width: 6px; background: row.deep; }
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 12px;
+                spacing: 12px;
                 Rectangle {
-                    height: 48px;
-                    if row.has-image: Image {
-                        height: parent.height;
-                        width: parent.width;
-                        source: row.image;
-                        image-fit: contain;
-                    }
+                    width: 44px;
+                    if row.has-image: Image { width: parent.width; height: 44px; source: row.image; image-fit: contain; }
                     if !row.has-image: Text {
                         text: row.initials;
                         color: row.deep;
-                        font-family: Mk.serif;
-                        font-size: 32px;
-                        font-weight: 700;
-                    }
-                }
-                Text {
-                    text: row.name;
-                    color: Mk.inkt;
-                    font-size: 15px;
-                    font-weight: 600;
-                    wrap: word-wrap;
-                    overflow: elide;
-                    height: 38px;
-                    vertical-alignment: top;
-                }
-                HorizontalLayout {
-                    Text {
-                        text: row.each;
-                        color: Mk.grafiet;
-                        font-size: 14px;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                    Text {
-                        text: row.price;
-                        color: Mk.inkt;
                         font-family: Mk.serif;
                         font-size: 22px;
                         font-weight: 700;
                     }
                 }
-            }
-            if row.qty > 1: Rectangle {
-                x: parent.width - 44px;
-                y: 8px;
-                width: 44px;
-                height: 36px;
-                background: row.deep;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text { text: row.name; color: Mk.inkt; font-size: 17px; font-weight: 600; overflow: elide; }
+                    Text { text: row.qty > 1 ? row.each : "1 ×"; color: Mk.grafiet; font-size: 14px; }
+                }
                 Text {
-                    text: "×" + row.qty;
-                    color: Mk.wit;
-                    font-size: 18px;
-                    font-weight: 800;
+                    text: row.price;
+                    color: Mk.inkt;
+                    font-family: Mk.serif;
+                    font-size: 22px;
+                    font-weight: 700;
+                    vertical-alignment: center;
                 }
             }
         }
     }
-
     if flick.content-height > flick.height && -flick.content-y < flick.content-height - flick.height - 1px: Rectangle {
         y: parent.height - 28px;
         height: 28px;
         background: Mk.beton-donker;
-        Text {
-            text: "MORE ↓";
-            color: Mk.grafiet;
-            font-size: 14px;
-            font-weight: 800;
-        }
+        Text { text: "MORE ↓"; color: Mk.grafiet; font-size: 14px; font-weight: 800; }
     }
 }
 
@@ -1218,7 +1173,7 @@ export component AppWindow inherits Window {
                         clicked => { root.action("confirm", 0); }
                     }
                 }
-                PaidCards {
+                PaidList {
                     horizontal-stretch: 1;
                     rows: root.rows;
                 }
@@ -1276,7 +1231,7 @@ export component AppWindow inherits Window {
             VerticalLayout {
                 padding: 32px;
                 spacing: 16px;
-                PaidCards {
+                PaidList {
                     vertical-stretch: 1;
                     rows: root.rows;
                 }
