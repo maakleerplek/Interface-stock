@@ -50,5 +50,11 @@ echo "--- Settings backup: htl-server may fetch these files, nothing else (pi-ki
 mkdir -p ~/.ssh
 grep -q pi-kiosk-backup ~/.ssh/authorized_keys 2>/dev/null || echo 'restrict,command="tar czf - --ignore-failed-read -C / home/pi/Interface-stock/.env home/pi/Interface-stock/barcode_cache.json boot/firmware/config.txt boot/firmware/cmdline.txt" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8uz0G1zaRxhi9JklTnuC5gb4WU8hm4VwX1dM3gG3DV htl-server pi-kiosk-backup' >> ~/.ssh/authorized_keys
 
-[ -f "$DIR/.env" ] || echo "!!! No .env yet: copy it from the backup to $DIR/.env (see README, Recovery)"
+echo "--- SD card read-only from the next boot (pi/overlay.sh): a power cut cannot corrupt it"
+if [ -f "$DIR/.env" ]; then
+    "$DIR/pi/overlay.sh" on
+else
+    # Not yet: with the overlay on, the .env copied in afterwards would be gone at the next boot.
+    echo "!!! No .env yet: copy it from the backup to $DIR/.env (see README, Recovery), then: $DIR/pi/overlay.sh on"
+fi
 echo "--- Done. Reboot to start the kiosk: sudo reboot"
