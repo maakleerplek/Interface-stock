@@ -40,7 +40,8 @@ pub struct Print {
 
 /// Type and colour from a filament's InvenTree name, "[Refill] TYPE [hardness] Colour (weight)":
 /// "Refill PLA Grey Beige (750 g)" is ("PLA", "Grey Beige (refill)"), "rTPU 95A Traffic White (1 kg)"
-/// is ("rTPU 95A", "Traffic White"). A new spool or material shows up by itself.
+/// is ("rTPU 95A", "Traffic White"). A brand in front is dropped: "EasyFil ePLA Traffic Red (1 kg)"
+/// is ("PLA", "Traffic Red"), ePLA prints as PLA. A new spool or material shows up by itself.
 pub fn filament_type(name: &str) -> (String, String) {
     let bare = name.split(" (").next().unwrap_or(name);
     let mut words: Vec<&str> = bare.split_whitespace().collect();
@@ -48,7 +49,10 @@ pub fn filament_type(name: &str) -> (String, String) {
     if refill {
         words.remove(0);
     }
-    let mut kind = words.first().map(|w| w.to_string()).unwrap_or_default();
+    if words.first().is_some_and(|w| w.eq_ignore_ascii_case("easyfil")) {
+        words.remove(0);
+    }
+    let mut kind = words.first().map(|w| if w.eq_ignore_ascii_case("epla") { "PLA".to_string() } else { w.to_string() }).unwrap_or_default();
     let mut rest = words.get(1..).unwrap_or_default().to_vec();
     // TPU hardness ("90A") is part of the type: 90A and 95A print differently.
     if rest.first().is_some_and(|w| w.len() > 1 && w.ends_with(['A', 'a']) && w[..w.len() - 1].chars().all(|c| c.is_ascii_digit())) {
@@ -313,6 +317,7 @@ mod tests {
         assert_eq!(t("Refill PETG Zinc Yellow (750 g)"), ("PETG".into(), "Zinc Yellow (refill)".into()));
         assert_eq!(t("rTPU 95A Traffic White (1 kg)"), ("rTPU 95A".into(), "Traffic White".into()));
         assert_eq!(t("PLA White"), ("PLA".into(), "White".into()));
+        assert_eq!(t("EasyFil ePLA Traffic Red (1 kg)"), ("PLA".into(), "Traffic Red".into()));
     }
 
     #[test]
