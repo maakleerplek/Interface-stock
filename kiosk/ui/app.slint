@@ -635,14 +635,14 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 8px;
                         Press {
-                            text: root.volunteer ? "✓ VOLUNTEER" : "VOLUNTEER";
+                            text: root.volunteer ? "✓ VOLUNTEER / WORKSHOP" : "VOLUNTEER / WORKSHOP";
                             enabled: root.units > 0;
                             radius: 0px;
                             fill: Mk.openlab;
                             ink: Mk.openlab-diep;
                             outline: root.volunteer ? Mk.openlab-diep : transparent;
                             outline-w: 3px;
-                            font-size: 18px;
+                            font-size: 15px;
                             weight: 800;
                             accessible-label: root.volunteer ? "VOLUNTEER: FREE" : "VOLUNTEER DRINK";
                             clicked => { if (root.volunteer) { root.action("volunteer", 0); } else { root.volunteer-ask = true; } }
@@ -1072,7 +1072,7 @@ export component AppWindow inherits Window {
                 spacing: 14px;
                 if root.volunteer: Text {
                     vertical-stretch: 1;
-                    text: "By my honour and the power vested in me, I solemnly swear by the spirit of HTL that I am a volunteer and that this is fair: a drink I earned, or material and machine time for me or for the lab.";
+                    text: "By my honour and the power vested in me, I solemnly swear by the spirit of HTL that I am a volunteer and that this is fair: a drink I earned, or material and machine time for me, for the lab or for a workshop.";
                     color: Mk.inkt;
                     font-family: Mk.serif;
                     font-size: 30px;
@@ -1272,6 +1272,9 @@ export component AppWindow inherits Window {
 
     // --- before VOLUNTEER turns on: who it is for ---------------------------
     if root.volunteer-ask: Rectangle {
+        // YES unlocks after a few seconds, as on the checkout check: time to read who it is for.
+        property <int> left: 3;
+        Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
         background: #000000aa;
         TouchArea { }   // nothing behind it reacts while it is open
         Rectangle {
@@ -1284,9 +1287,9 @@ export component AppWindow inherits Window {
                 padding: 36px;
                 spacing: 18px;
                 Text { text: "FOR VOLUNTEERS ONLY"; color: Mk.openlab-diep; font-size: 20px; font-weight: 800; }
-                Text { text: "Are you an HTL volunteer?"; color: Mk.inkt; font-size: 36px; font-weight: 800; wrap: word-wrap; }
+                Text { text: "Are you an HTL volunteer, or is this for a workshop?"; color: Mk.inkt; font-size: 32px; font-weight: 800; wrap: word-wrap; }
                 Text {
-                    text: "Volunteer mode makes the cart free: a drink you earned, or material and machine time for yourself or for the lab. It is booked as volunteer use.\nVisitors pay as usual: tap BACK.";
+                    text: "This makes the cart free: a drink you earned, or material and machine time for yourself, the lab or a workshop. It is booked as volunteer / workshop use, never as paid.\nVisitors pay as usual: tap BACK.";
                     color: Mk.inkt;
                     font-size: 20px;
                     wrap: word-wrap;
@@ -1304,7 +1307,9 @@ export component AppWindow inherits Window {
                         clicked => { root.volunteer-ask = false; }
                     }
                     Press {
-                        text: "YES, I'M A VOLUNTEER";
+                        text: "YES, I AM" + (left > 0 ? " (" + left + ")" : "");
+                        accessible-label: "YES, I'M A VOLUNTEER";
+                        enabled: left == 0;
                         radius: 0px;
                         fill: Mk.openlab-diep;
                         clicked => {

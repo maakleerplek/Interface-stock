@@ -74,6 +74,20 @@ impl Rig {
         slint::platform::update_timers_and_animations();
     }
 
+    /// Draw, then let a 3 s countdown (pop-up, checkout check) run out, one timer step per second.
+    fn wait_lock(&mut self) {
+        // Drawing starts the countdown, as in shot().
+        self.win.request_redraw();
+        let mut buf = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; (W * H) as usize];
+        self.win.draw_if_needed(|r| {
+            r.render(&mut buf, W as usize);
+        });
+        for _ in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(1050));
+            slint::platform::update_timers_and_animations();
+        }
+    }
+
     fn scan(&mut self, code: &str) {
         let ui = &self.ui;
         self.kiosk.handle(Event::from_barcode(code), |v| apply(ui, v));
@@ -282,6 +296,9 @@ fn tap_through_every_screen() {
     assert!(!r.ui.get_volunteer(), "BACK leaves it off");
     r.tap("VOLUNTEER DRINK");
     r.tap("YES, I'M A VOLUNTEER");
+    assert!(!r.ui.get_volunteer(), "YES is locked for the first seconds");
+    r.wait_lock();
+    r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer());
     r.shot("volunteer-on");
     r.tap("CHECKOUT  →");
@@ -364,6 +381,7 @@ fn tap_through_every_screen() {
     assert_eq!(r.ui.get_total().as_str(), "€23.50");
     assert_eq!(r.ui.get_laser_sessions().row_count(), 0);
     r.tap("VOLUNTEER DRINK");
+    r.wait_lock();
     r.tap("YES, I'M A VOLUNTEER");
     assert!(r.ui.get_volunteer(), "a volunteer's machine time is free, booked at €0");
     r.scan("CANCEL");
