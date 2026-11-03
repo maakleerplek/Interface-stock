@@ -50,6 +50,9 @@ echo "--- Settings backup: htl-server may fetch these files, nothing else (pi-ki
 mkdir -p ~/.ssh
 grep -q pi-kiosk-backup ~/.ssh/authorized_keys 2>/dev/null || echo 'restrict,command="tar czf - --ignore-failed-read -C / home/pi/Interface-stock/.env home/pi/Interface-stock/barcode_cache.json boot/firmware/config.txt boot/firmware/cmdline.txt" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK8uz0G1zaRxhi9JklTnuC5gb4WU8hm4VwX1dM3gG3DV htl-server pi-kiosk-backup' >> ~/.ssh/authorized_keys
 
+echo "--- Health log: htl-server may run pi/health.sh, nothing else (log ~/pi-health.log on htl-server)"
+grep -q pi-health ~/.ssh/authorized_keys 2>/dev/null || echo "restrict,command=\"$DIR/pi/health.sh\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMs49zTVVBNjbkSdrWfKNYSuDSFpbIB9Otkj0X5DoqA htl-server pi-health" >> ~/.ssh/authorized_keys
+
 echo "--- SD card read-only from the next boot (pi/overlay.sh): a power cut cannot corrupt it"
 if [ -f "$DIR/.env" ]; then
     "$DIR/pi/overlay.sh" on
