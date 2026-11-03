@@ -448,9 +448,9 @@ export component AppWindow inherits Window {
         height: root.height - 72px;
 
         // --- shop: bands | cards | cart ------------------------------------
-        // Gone while the 3D-print or minutes screen covers it: no hidden buttons under them.
-        if root.screen == Screen.shop && !root.print-open && !root.time-open: HorizontalLayout {
-            VerticalLayout {
+        // The bands stay while 3D print or machine time is open: they switch between those screens.
+        if root.screen == Screen.shop: VerticalLayout {
+                x: 0;
                 width: 200px;
                 for c in root.categories: Rectangle {
                     accessible-role: button;
@@ -461,7 +461,7 @@ export component AppWindow inherits Window {
                     background: band-touch.pressed ? c.light.darker(25%) : c.light;
                     Rectangle {
                         x: 0;
-                        width: c.name == root.category ? 16px : 0px;
+                        width: c.name == root.category && !root.print-open && !root.time-open ? 16px : 0px;
                         background: c.deep;
                     }
                     Text {
@@ -472,7 +472,7 @@ export component AppWindow inherits Window {
                         font-size: 22px;
                         font-weight: 800;
                     }
-                    if c.name == root.category: Text {
+                    if c.name == root.category && !root.print-open && !root.time-open: Text {
                         x: parent.width - 34px;
                         y: 14px;
                         text: "●";
@@ -481,7 +481,11 @@ export component AppWindow inherits Window {
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: #00000022; }
                     band-touch := TouchArea {
-                        clicked => { root.select-category(c.name); }
+                        clicked => {
+                            root.print-open = false;
+                            root.time-open = false;
+                            root.select-category(c.name);
+                        }
                     }
                 }
                 Rectangle { background: Mk.beton; vertical-stretch: 0.01; }
@@ -492,6 +496,7 @@ export component AppWindow inherits Window {
                     max-height: 132px;
                     vertical-stretch: 1;
                     background: print-touch.pressed ? Mk.workshop-diep.darker(25%) : Mk.workshop-diep;
+                    Rectangle { x: 0; width: root.print-open ? 16px : 0px; background: Mk.wit; }
                     Text {
                         x: 30px;
                         y: parent.height - self.height - 16px;
@@ -506,6 +511,7 @@ export component AppWindow inherits Window {
                             root.select-print-type("");
                             root.print-type-pk = -1;
                             root.print-grams = 0;
+                            root.time-open = false;
                             root.print-open = true;
                         }
                     }
@@ -519,6 +525,7 @@ export component AppWindow inherits Window {
                     property <color> deep: t.id == "laser" ? #A8401A : #34505E;
                     background: tool-touch.pressed ? self.deep.darker(25%) : self.deep;
                     Rectangle { y: 0; height: 1px; background: #ffffff33; }
+                    Rectangle { x: 0; width: root.time-open && root.time-id == t.id ? 16px : 0px; background: Mk.wit; }
                     Text {
                         x: 30px;
                         y: parent.height - self.height - 16px;
@@ -535,11 +542,15 @@ export component AppWindow inherits Window {
                             root.time-minimum = t.minimum;
                             root.time-minutes = 0;
                             root.laser-typing = false;
+                            root.print-open = false;
                             root.time-open = true;
                         }
                     }
                 }
-            }
+        }
+        if root.screen == Screen.shop && !root.print-open && !root.time-open: HorizontalLayout {
+            x: 200px;
+            width: parent.width - 200px;
             grid := Rectangle {
                 horizontal-stretch: 1;
                 clip: true;
@@ -677,6 +688,8 @@ export component AppWindow inherits Window {
         // --- cancel ----------------------------------------------------------
         // --- 3D print: the type, then its colour (both optional), the grams --
         if root.screen == Screen.shop && root.print-open: Rectangle {
+            x: 200px;
+            width: parent.width - 200px;
             background: Mk.beton;
             TouchArea { }   // nothing behind it reacts while it is open
             HorizontalLayout {
@@ -715,11 +728,11 @@ export component AppWindow inherits Window {
                         font-size: root.print-type == "" ? 16px : 20px;
                         font-weight: root.print-type == "" ? 400 : 800;
                     }
-                    // The colours as the shop's tiles, 4 to a row.
+                    // The colours as the shop's tiles, 3 to a row.
                     colours := Rectangle {
                         vertical-stretch: 1;
                         clip: true;
-                        property <int> cols: 4;
+                        property <int> cols: 3;
                         property <length> gap: 10px;
                         property <length> tw: (self.width - (self.cols - 1) * self.gap) / self.cols;
                         property <length> th: 194px;
@@ -793,6 +806,8 @@ export component AppWindow inherits Window {
 
         // --- laser: tick your cuts from the laser timer, add them to the cart --
         if root.screen == Screen.shop && root.time-open && root.time-id == "laser" && !root.laser-typing: Rectangle {
+            x: 200px;
+            width: parent.width - 200px;
             background: Mk.beton;
             TouchArea { }   // nothing behind it reacts while it is open
             HorizontalLayout {
@@ -810,10 +825,10 @@ export component AppWindow inherits Window {
                         font-size: 18px;
                         wrap: word-wrap;
                     }
-                    // Cuts as cards, four in a row: LightBurn's picture large, name, start and time under it.
+                    // Cuts as cards, three in a row: LightBurn's picture large, name, start and time under it.
                     cards := Flickable {
                         vertical-stretch: 1;
-                        property <int> per-row: 4;
+                        property <int> per-row: 3;
                         property <length> gap: 10px;
                         property <length> card-w: (self.width - (self.per-row - 1) * self.gap) / self.per-row;
                         property <length> card-h: self.card-w + 78px;
@@ -954,6 +969,8 @@ export component AppWindow inherits Window {
 
         // --- machine time: type the minutes, add to the cart ----------------
         if root.screen == Screen.shop && root.time-open && (root.time-id != "laser" || root.laser-typing): Rectangle {
+            x: 200px;
+            width: parent.width - 200px;
             background: Mk.beton;
             TouchArea { }   // nothing behind it reacts while it is open
             HorizontalLayout {
@@ -982,6 +999,7 @@ export component AppWindow inherits Window {
                         text: root.time-minutes > 0 && root.time-minutes * root.time-per-minute < root.time-minimum ? "Under the minimum: with your prints and other machine time it is topped up to €" + root.time-minimum.to-fixed(2) + " at checkout." : " ";
                         color: Mk.grafiet;
                         font-size: 16px;
+                        wrap: word-wrap;
                     }
                 }
                 VerticalLayout {
