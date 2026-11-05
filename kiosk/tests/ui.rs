@@ -74,7 +74,7 @@ impl Rig {
         slint::platform::update_timers_and_animations();
     }
 
-    /// Draw, then let a 3 s countdown (pop-up, checkout check) run out, one timer step per second.
+    /// Draw, then let a 2 s countdown (pop-up, checkout check) run out, one timer step per second.
     fn wait_lock(&mut self) {
         // Drawing starts the countdown, as in shot().
         self.win.request_redraw();
@@ -82,7 +82,7 @@ impl Rig {
         self.win.draw_if_needed(|r| {
             r.render(&mut buf, W as usize);
         });
-        for _ in 0..3 {
+        for _ in 0..CHECKOUT_LOCK.as_secs() {
             std::thread::sleep(std::time::Duration::from_millis(1050));
             slint::platform::update_timers_and_animations();
         }

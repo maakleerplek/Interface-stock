@@ -14,7 +14,7 @@ pub const VOLUNTEER_DONE_FOR: Duration = Duration::from_secs(4);
 /// An unanswered "Did you pay?" goes back to the QR after this long.
 pub const PAY_CONFIRM_FOR: Duration = Duration::from_secs(30);
 /// CONFIRM on the checkout check is ignored this long after it opens: look at the cart first.
-pub const CHECKOUT_LOCK: Duration = Duration::from_secs(3);
+pub const CHECKOUT_LOCK: Duration = Duration::from_secs(2);
 /// Banner messages disappear after this long.
 pub const MESSAGE_FOR: Duration = Duration::from_secs(6);
 

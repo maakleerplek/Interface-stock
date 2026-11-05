@@ -1079,7 +1079,7 @@ export component AppWindow inherits Window {
         // CONFIRM unlocks after a countdown (state.rs CHECKOUT_LOCK, enforced there too),
         // so CHECKOUT + CONFIRM can't be tapped through without looking.
         if root.screen == Screen.checkout-confirm: Entry {
-            property <int> left: 3;
+            property <int> left: 2;
             Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
             kicker: root.volunteer ? "VOLUNTEER" : "STEP 1 OF 2";
             title: root.volunteer ? "The oath" : "Check your cart";
@@ -1291,7 +1291,7 @@ export component AppWindow inherits Window {
     // --- before VOLUNTEER turns on: who it is for ---------------------------
     if root.volunteer-ask: Rectangle {
         // YES unlocks after a few seconds, as on the checkout check: time to read who it is for.
-        property <int> left: 3;
+        property <int> left: 2;
         Timer { interval: 1s; running: left > 0; triggered => { left -= 1; } }
         background: #000000aa;
         TouchArea { }   // nothing behind it reacts while it is open
