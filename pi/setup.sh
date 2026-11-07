@@ -53,6 +53,10 @@ grep -q pi-kiosk-backup ~/.ssh/authorized_keys 2>/dev/null || echo 'restrict,com
 echo "--- Health log: htl-server may run pi/health.sh, nothing else (log ~/pi-health.log on htl-server)"
 grep -q pi-health ~/.ssh/authorized_keys 2>/dev/null || echo "restrict,command=\"$DIR/pi/health.sh\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMs49zTVVBNjbkSdrWfKNYSuDSFpbIB9Otkj0X5DoqA htl-server pi-health" >> ~/.ssh/authorized_keys
 
+echo "--- Tailscale with SSH (before the overlay, so the login survives a reboot); prints a login URL the first time"
+command -v tailscale > /dev/null || curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --ssh --hostname=interface-stock
+
 echo "--- SD card read-only from the next boot (pi/overlay.sh): a power cut cannot corrupt it"
 if [ -f "$DIR/.env" ]; then
     "$DIR/pi/overlay.sh" on
