@@ -377,6 +377,9 @@ pub fn action_from(name: &str, n: i32) -> Option<Action> {
     if let Some(pk) = name.strip_prefix("print-type:") {
         return Some(Action::Print(state::PrintPick::TypeOf(pk.parse().ok()?), grams));
     }
+    if name == "print:own" {
+        return Some(Action::Print(state::PrintPick::Own, grams));
+    }
     if name == "print:none" {
         return Some(Action::Print(state::PrintPick::Unknown, grams));
     }

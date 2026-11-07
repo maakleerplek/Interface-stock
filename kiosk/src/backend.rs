@@ -61,6 +61,9 @@ pub trait Backend: Send {
 
 /// 3D-print price per gram when a filament has none set in InvenTree.
 pub const DEFAULT_PRINT_PRICE: f64 = 0.10;
+/// 3D-print price per gram with the visitor's own spool (brought along or bought here).
+// shortcut: same number as core/checkout.py PRINT_OWN_PER_GRAM, move to /api/till/rates when the kiosk switches to the till.
+pub const OWN_PRINT_PRICE: f64 = 0.03;
 /// Machine price per minute when InvenTree has none (the stock app's default too).
 pub const DEFAULT_TOOL_PRICE: f64 = 0.50;
 /// Least a payment with machine use costs (bank costs), as in the stock app.

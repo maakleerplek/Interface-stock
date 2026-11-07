@@ -350,6 +350,8 @@ export component AppWindow inherits Window {
     in-out property <string> print-name;
     in-out property <string> print-colour-price;
     in-out property <int> print-grams: 0;
+    // Their own spool (brought along or bought here): the own price, whatever the filament.
+    in-out property <bool> print-own: false;
     // Machine time: the machines (price per minute, minimum), and the minutes screen's state.
     in property <[ToolRate]> tools;
     // Open laser cuts, added with one tap each on the LASERCUT screen.
@@ -511,6 +513,7 @@ export component AppWindow inherits Window {
                             root.select-print-type("");
                             root.print-type-pk = -1;
                             root.print-grams = 0;
+                            root.print-own = false;
                             root.time-open = false;
                             root.print-open = true;
                         }
@@ -757,13 +760,21 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    Press {
+                        text: (root.print-own ? "✓ " : "") + "MY OWN SPOOL (BROUGHT OR BOUGHT HERE) · €0.03/g";
+                        radius: 0px;
+                        font-size: 18px;
+                        fill: root.print-own ? Mk.workshop-diep : Mk.wit;
+                        ink: root.print-own ? Mk.wit : Mk.inkt;
+                        outline: root.print-own ? transparent : Mk.lijn;
+                        clicked => { root.print-own = !root.print-own; }
+                    }
                 }
                 VerticalLayout {
                     width: 380px;
                     spacing: 8px;
                     Text { text: "HOW MANY GRAMS?"; color: Mk.inkt; font-size: 20px; font-weight: 800; }
                     Text { text: "The weight Bambu Studio / PrusaSlicer shows for your print."; color: Mk.grafiet; font-size: 14px; wrap: word-wrap; }
-                    Text { text: "Own filament, or a spool bought here: €0.03/g."; color: Mk.inkt; font-size: 16px; font-weight: 800; wrap: word-wrap; }
                     Rectangle {
                         height: 72px;
                         background: Mk.wit;
@@ -776,7 +787,8 @@ export component AppWindow inherits Window {
                     }
                     Keypad { value <=> root.print-grams; }
                     Text {
-                        text: root.print-pk >= 0 ? root.print-type + " " + root.print-name + " · " + root.print-colour-price
+                        text: root.print-own ? "Your own spool, brought along or bought here: €0.03/g."
+                            : root.print-pk >= 0 ? root.print-type + " " + root.print-name + " · " + root.print-colour-price
                             : root.print-type != "" ? root.print-type + ", no colour · " + root.print-type-price
                             : "No filament picked: booked without one, at the standard price.";
                         color: Mk.grafiet;
@@ -789,7 +801,7 @@ export component AppWindow inherits Window {
                         enabled: root.print-grams > 0;
                         fill: Mk.workshop-diep;
                         clicked => {
-                            root.action(root.print-pk >= 0 ? "print:" + root.print-pk : root.print-type-pk >= 0 ? "print-type:" + root.print-type-pk : "print:none", root.print-grams);
+                            root.action(root.print-own ? "print:own" : root.print-pk >= 0 ? "print:" + root.print-pk : root.print-type-pk >= 0 ? "print-type:" + root.print-type-pk : "print:none", root.print-grams);
                             root.print-open = false;
                         }
                     }

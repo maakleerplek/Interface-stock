@@ -66,6 +66,8 @@ pub enum PrintPick {
     TypeOf(i64),
     /// Only grams.
     Unknown,
+    /// The visitor's own spool, brought along or bought here: the own price.
+    Own,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,6 +243,7 @@ impl Machine {
                 (kind, if cheapest.is_finite() { cheapest } else { be.print_price(&Part::default()) })
             }
             PrintPick::Unknown => (String::new(), be.print_price(&Part::default())),
+            PrintPick::Own => ("Own filament".into(), crate::backend::OWN_PRINT_PRICE),
         };
         self.info(format!("3D print added: {grams} g {material}"));
         self.cart.prints.push(Print { material, grams, per_gram, minimum: be.print_minimum() });
@@ -570,10 +573,21 @@ mod tests {
     }
 
     #[test]
+    fn a_print_with_own_filament_costs_the_own_price_and_the_minimum() {
+        let (be, mut m) = (Demo::new(), Machine::new(Instant::now()));
+        m.handle(&be, Event::Button(Action::Print(PrintPick::Own, 200)), Instant::now());
+        assert_eq!(m.cart.prints[0].material, "Own filament");
+        assert!((m.cart.total(|p| be.price(p)) - 6.0).abs() < 1e-9);   // 200 g × €0.03
+        m.cart.prints[0].grams = 100;
+        assert!((m.cart.total(|p| be.price(p)) - 5.0).abs() < 1e-9);   // €3, raised to the €5 minimum
+    }
+
+    #[test]
     fn print_action_from_the_touch_screen() {
         assert_eq!(crate::action_from("print:9", 42), Some(Action::Print(PrintPick::Filament(9), 42)));
         assert_eq!(crate::action_from("print-type:9", 42), Some(Action::Print(PrintPick::TypeOf(9), 42)));
         assert_eq!(crate::action_from("print:none", 42), Some(Action::Print(PrintPick::Unknown, 42)));
+        assert_eq!(crate::action_from("print:own", 42), Some(Action::Print(PrintPick::Own, 42)));
         assert_eq!(crate::action_from("print:x", 42), None);
     }
 
